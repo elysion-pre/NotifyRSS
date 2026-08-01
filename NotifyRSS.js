@@ -448,7 +448,7 @@ function debugRssFeeds() {
     'https://gigazine.net/news/rss_2.0/',      // GIGAZINE
     'https://www.4gamer.net/rss/index.xml',     // 4Gamer
     'https://game.watch.impress.co.jp/data/rss/1.0/gw/feed.rdf', // Game Watch
-    'https://hibikore-guraburu.net/feed'       // 日々是グラブる
+    'https://daily-guraburu.com/feed'       // 日々是グラブる
   ];
 
   testUrls.forEach(url => {
