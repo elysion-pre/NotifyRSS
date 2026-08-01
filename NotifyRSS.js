@@ -123,7 +123,7 @@ function checkRssAndNotifyDiscord() {
         }
 
         postsToSend.forEach((post, postIndex) => {
-          console.log(`  └ [送信 ${postIndex + 1}/${postsToSend.length}] "${post.title}" | 画像: ${post.imageUrl ? post.imageUrl : 'なし'}`);
+          console.log(`  └ [送信 ${postIndex + 1}/${postsToSend.length}] "${post.title}"`);
           sendDiscordEmbedNotification(webhookUrl, post.title, post.link, post.pubTime, siteName, customIconUrl, defaultIconUrl, colorHex, post.imageUrl);
           
           Utilities.sleep(2500);
@@ -225,7 +225,7 @@ function findFeaturedImageInXml(element) {
  */
 function fetchOgImageFromUrl(url) {
   try {
-    const encodedUrl = cleanAndEncodeUrl(url);
+    const encodedUrl = safeUrlEncode(url);
     const options = {
       muteHttpExceptions: true,
       headers: {
@@ -296,10 +296,10 @@ function isValidImageUrl(url) {
 }
 
 /**
- * Discord通知機能（Embedカード構造に画像を正しくセット）
+ * Discord通知機能
  */
 function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, customIconUrl, defaultIconUrl, hexColorStr, imageUrl) {
-  const safeLink = cleanAndEncodeUrl(link);
+  const safeLink = safeUrlEncode(link);
 
   let colorNum = 0x3498db;
   if (hexColorStr) {
@@ -318,17 +318,20 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
     color: colorNum,
     footer: {
       text: siteName || "RSS Feed",
-      icon_url: footerIcon ? cleanAndEncodeUrl(footerIcon) : undefined
+      icon_url: footerIcon ? safeUrlEncode(footerIcon) : undefined
     },
     timestamp: isoTimestamp
   };
 
-  // Embedカード内への画像埋め込み設定（HTMLエンティティ解除＆デコード処理済みURL）
+  // Embedカード画像埋め込み設定
   if (imageUrl) {
-    const safeImageUrl = cleanAndEncodeUrl(imageUrl);
+    const safeImageUrl = safeUrlEncode(imageUrl);
     if (safeImageUrl) {
       embed.image = { url: safeImageUrl };
+      console.log(`  └ [送信画像URL]: ${safeImageUrl}`);
     }
+  } else {
+    console.log(`  └ [送信画像URL]: なし`);
   }
 
   const payload = {
@@ -341,7 +344,7 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
   }
   
   if (customIconUrl && (customIconUrl.startsWith('http://') || customIconUrl.startsWith('https://'))) {
-    payload.avatar_url = cleanAndEncodeUrl(customIconUrl);
+    payload.avatar_url = safeUrlEncode(customIconUrl);
   }
 
   const options = {
@@ -358,31 +361,34 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
 }
 
 /**
- * URLのデコード・HTMLエンティティ解除・安全な再エンコードを行うヘルパー関数
+ * 日本語・特殊文字・二重エンコードに対応した高精度URLエンコード関数
  */
-function cleanAndEncodeUrl(rawUrl) {
+function safeUrlEncode(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return '';
-  
-  // 1. 改行や不要な空白の除去
+
   let clean = rawUrl.replace(/[\r\n\t]/g, '').trim();
   if (clean.startsWith('//')) clean = 'https:' + clean;
 
-  // 2. HTMLエンティティ ( &amp; など ) を解除する
+  // HTMLエンティティ(&amp;等)を完全解除
   clean = decodeHtmlEntitiesFully(clean);
 
+  // すでにパーセントエンコード済みの場合は1回完全解凍
   try {
-    // 3. すでにパーセントエンコードされている場合は完全に一度「生の文字列」にデコードする
     let decoded = clean;
     while (decoded.includes('%')) {
       const prev = decoded;
       decoded = decodeURIComponent(decoded);
       if (prev === decoded) break;
     }
-    // 4. Discordが認識できる標準のURIエンコード形式に変換する
-    return encodeURI(decoded);
+    clean = decoded;
   } catch (e) {
-    return encodeURI(clean);
+    // 解凍失敗時はそのまま進む
   }
+
+  // マルチバイト文字（日本語など）および特殊文字を安全に置換・エンコード
+  return clean.replace(/[^\x00-\x7F]/g, function(c) {
+    return encodeURIComponent(c);
+  }).replace(/ /g, '%20');
 }
 
 /* ヘルパー関数群 */
