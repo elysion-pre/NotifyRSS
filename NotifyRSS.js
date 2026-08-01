@@ -83,7 +83,7 @@ function checkRssAndNotifyDiscord() {
         const link = getLinkFromItem(item);
         const pubDateStr = getElementTextByNames(item, ['date', 'pubdate', 'published', 'updated']);
         
-        // ログ用にタイトルを表示しつつ画像抽出
+        // 強化された画像抽出ロジック
         const imageUrl = getImageUrlFromItem(item, title);
         
         let pubTime = 0;
@@ -129,7 +129,7 @@ function checkRssAndNotifyDiscord() {
         }
 
         postsToSend.forEach((post, postIndex) => {
-          console.log(`  └ [送信 ${postIndex + 1}/${postsToSend.length}] "${post.title}" | 画像URL: ${post.imageUrl || 'なし'}`);
+          console.log(`  └ [送信 ${postIndex + 1}/${postsToSend.length}] "${post.title}" | 画像: ${post.imageUrl ? '〇' : '×'}`);
           sendDiscordEmbedNotification(webhookUrl, post.title, post.link, post.pubTime, siteName, customIconUrl, defaultIconUrl, colorHex, post.imageUrl);
           
           // レートリミット（429エラー）回避のため 2.5秒 待機
@@ -210,62 +210,108 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
 }
 
 /**
- * RSSアイテムから画像を抽出する関数（詳細ログ出力版）
+ * RSSアイテムから画像を抽出する関数（ライブドアブログ・各種メディア強化版）
  */
 function getImageUrlFromItem(item, itemTitle) {
   const children = item.getChildren();
 
-  // 1. 専用タグ (<media:thumbnail> / <media:content> / <enclosure>) から抽出
+  // 1. 専用の画像タグから抽出 (<media:thumbnail>, <media:content>, <enclosure>, <image>)
   for (let i = 0; i < children.length; i++) {
     const child = children[i];
     const name = child.getName().toLowerCase();
 
+    // <media:thumbnail url="..."> / <media:content url="...">
     if (name === 'thumbnail' || name === 'content') {
       const urlAttr = child.getAttribute('url');
-      if (urlAttr) {
+      if (urlAttr && urlAttr.getValue()) {
         console.log(`[画像抽出] <media:${name}> から取得 (${itemTitle}): ${urlAttr.getValue()}`);
         return urlAttr.getValue();
       }
     }
+    // <enclosure url="..." type="image/...">
     if (name === 'enclosure') {
       const typeAttr = child.getAttribute('type');
       const urlAttr = child.getAttribute('url');
-      if (urlAttr && typeAttr && typeAttr.getValue().startsWith('image/')) {
-        console.log(`[画像抽出] <enclosure> から取得 (${itemTitle}): ${urlAttr.getValue()}`);
-        return urlAttr.getValue();
+      if (urlAttr && urlAttr.getValue()) {
+        if (!typeAttr || typeAttr.getValue().startsWith('image/')) {
+          console.log(`[画像抽出] <enclosure> から取得 (${itemTitle}): ${urlAttr.getValue()}`);
+          return urlAttr.getValue();
+        }
+      }
+    }
+    // <image> タグの直下に URL テキストがある場合（一部のRDF等）
+    if (name === 'image') {
+      const imgText = child.getText();
+      if (imgText && imgText.startsWith('http')) {
+        console.log(`[画像抽出] <image> から取得 (${itemTitle}): ${imgText}`);
+        return imgText;
       }
     }
   }
 
-  // 2. 本文（encoded / description / content）から <img> タグを抽出
-  let description = getElementTextByNames(item, ['encoded', 'description', 'content']);
-  if (description) {
-    // HTMLデコード
-    description = description
+  // 2. 本文HTMLから <img> タグを抽出する（encoded -> content -> description の優先順で探索）
+  const htmlContents = getAllHtmlContents(item);
+
+  for (let j = 0; j < htmlContents.length; j++) {
+    let rawHtml = htmlContents[j];
+    if (!rawHtml) continue;
+
+    // HTML特殊文字のエスケープ解除
+    rawHtml = rawHtml
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"')
       .replace(/&#039;/g, "'")
       .replace(/&amp;/g, '&');
 
-    // <img> タグを探す
-    const imgMatch = description.match(/<img[^>]+src=["']([^"']+)["']/i);
-    if (imgMatch && imgMatch[1]) {
-      const imgSrc = imgMatch[1];
-      if (!imgSrc.includes('/smilies/') && !imgSrc.includes('emoji')) {
-        console.log(`[画像抽出] 本文<img>タグから取得 (${itemTitle}): ${imgSrc}`);
+    // <img> タグから src 属性を取り出す正規表現（複数マッチ）
+    const imgRegex = /<img[^>]+src=["']([^"']+)["']/gi;
+    let match;
+
+    while ((match = imgRegex.exec(rawHtml)) !== null) {
+      const imgSrc = match[1];
+
+      // ブログのカウンター用画像、絵文字、アクセス解析用ドット画像を除外
+      if (
+        imgSrc &&
+        !imgSrc.includes('/smilies/') &&
+        !imgSrc.includes('emoji') &&
+        !imgSrc.includes('counter') &&
+        !imgSrc.includes('analy') &&
+        !imgSrc.includes('.gif') // アイコン系のGIF画像を除外
+      ) {
+        console.log(`[画像抽出] 本文HTMLから取得 (${itemTitle}): ${imgSrc}`);
         return imgSrc;
-      } else {
-        console.log(`[画像抽出スキップ] スマイリー/絵文字のため除外 (${itemTitle}): ${imgSrc}`);
       }
-    } else {
-      console.log(`[画像抽出なし] 本文に <img> タグが見つかりませんでした (${itemTitle})`);
     }
-  } else {
-    console.log(`[画像抽出なし] 本文(description/encoded)自体が存在しません (${itemTitle})`);
   }
 
+  console.log(`[画像抽出なし] 画像が見つかりませんでした (${itemTitle})`);
   return null;
+}
+
+/**
+ * item配下から encoded / content / description などのHTML全文を配列で取得
+ */
+function getAllHtmlContents(parentElement) {
+  const children = parentElement.getChildren();
+  const contents = [];
+
+  // 優先順位: encoded（全文） -> content -> description（概要）
+  const targetNames = ['encoded', 'content', 'description'];
+
+  targetNames.forEach(target => {
+    for (let i = 0; i < children.length; i++) {
+      if (children[i].getName().toLowerCase() === target) {
+        const text = children[i].getText();
+        if (text && text.trim() !== '') {
+          contents.push(text);
+        }
+      }
+    }
+  });
+
+  return contents;
 }
 
 /* ヘルパー関数群 */
