@@ -36,7 +36,7 @@ jobs:
         if: always() # 成功・失敗に関わらず必ず実行
         uses: sarisia/actions-status-discord@v1
         with:
-          webhook: ${{ secrets.WEBHOOK_DISCORD_DEPLOY }}
+          webhook: ${{ secrets.DISCORD_WEBHOOK }}
           status: ${{ job.status }}
           title: "GAS自動デプロイ結果"
           avatar_url: ${{ github.actor.avatar_url }} # プッシュした人のGitHubアイコンを表示
