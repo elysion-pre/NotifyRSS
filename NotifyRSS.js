@@ -144,7 +144,7 @@ function checkRssAndNotifyDiscord() {
  * 画像抽出ロジック（WebページOGP優先＆RSS解析フォールバック）
  */
 function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
-  // 優先度1: 記事ページへ直接アクセスして og:image を取得（もっとも正確なアイキャッチが取れる）
+  // 優先度1: 記事ページへ直接アクセスして og:image を取得
   if (itemLink && (itemLink.startsWith('http://') || itemLink.startsWith('https://'))) {
     const ogImage = fetchOgImageFromUrl(itemLink);
     if (ogImage) {
@@ -296,10 +296,9 @@ function isValidImageUrl(url) {
 }
 
 /**
- * Discord通知機能（二重エンコード防止および安全なURL変換処理）
+ * Discord通知機能（Embedカード構造に画像を正しくセット）
  */
 function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, customIconUrl, defaultIconUrl, hexColorStr, imageUrl) {
-  // 1. 記事リンクの安全エンコード（二重エンコード防止）
   const safeLink = cleanAndEncodeUrl(link);
 
   let colorNum = 0x3498db;
@@ -324,7 +323,7 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
     timestamp: isoTimestamp
   };
 
-  // 2. 画像URLの安全エンコード（Discordでの非表示・ブランクを防止）
+  // Embedカード内への画像埋め込み設定（HTMLエンティティ解除＆デコード処理済みURL）
   if (imageUrl) {
     const safeImageUrl = cleanAndEncodeUrl(imageUrl);
     if (safeImageUrl) {
@@ -359,24 +358,27 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
 }
 
 /**
- * URLのデコード・再エンコードを行う安全用ヘルパー関数
- * (日本語文字列、二重エンコード、特殊文字を安全に正しく処理します)
+ * URLのデコード・HTMLエンティティ解除・安全な再エンコードを行うヘルパー関数
  */
 function cleanAndEncodeUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return '';
   
+  // 1. 改行や不要な空白の除去
   let clean = rawUrl.replace(/[\r\n\t]/g, '').trim();
   if (clean.startsWith('//')) clean = 'https:' + clean;
 
+  // 2. HTMLエンティティ ( &amp; など ) を解除する
+  clean = decodeHtmlEntitiesFully(clean);
+
   try {
-    // すでにパーセントエンコードされている場合は完全に1回生の日本語に戻す
+    // 3. すでにパーセントエンコードされている場合は完全に一度「生の文字列」にデコードする
     let decoded = clean;
     while (decoded.includes('%')) {
       const prev = decoded;
       decoded = decodeURIComponent(decoded);
       if (prev === decoded) break;
     }
-    // 標準形式に正規化してエンコード
+    // 4. Discordが認識できる標準のURIエンコード形式に変換する
     return encodeURI(decoded);
   } catch (e) {
     return encodeURI(clean);
