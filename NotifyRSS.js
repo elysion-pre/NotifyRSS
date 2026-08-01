@@ -82,7 +82,9 @@ function checkRssAndNotifyDiscord() {
         const title = getElementTextByNames(item, ['title']);
         const link = getLinkFromItem(item);
         const pubDateStr = getElementTextByNames(item, ['date', 'pubdate', 'published', 'updated']);
-        const imageUrl = getImageUrlFromItem(item); // 記事画像（アイキャッチ）の取得
+        
+        // ログ用にタイトルを表示しつつ画像抽出
+        const imageUrl = getImageUrlFromItem(item, title);
         
         let pubTime = 0;
         if (pubDateStr) {
@@ -127,7 +129,7 @@ function checkRssAndNotifyDiscord() {
         }
 
         postsToSend.forEach((post, postIndex) => {
-          console.log(`  └ [送信 ${postIndex + 1}/${postsToSend.length}] "${post.title}"`);
+          console.log(`  └ [送信 ${postIndex + 1}/${postsToSend.length}] "${post.title}" | 画像URL: ${post.imageUrl || 'なし'}`);
           sendDiscordEmbedNotification(webhookUrl, post.title, post.link, post.pubTime, siteName, customIconUrl, defaultIconUrl, colorHex, post.imageUrl);
           
           // レートリミット（429エラー）回避のため 2.5秒 待機
@@ -152,7 +154,6 @@ function checkRssAndNotifyDiscord() {
 function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, customIconUrl, defaultIconUrl, hexColorStr, imageUrl) {
   const safeLink = encodeURI(link);
 
-  // 16進数カラーコードを整数（DEC）に変換（安全な判定）
   let colorNum = 0x3498db; // デフォルト：青
   if (hexColorStr) {
     const cleanHex = String(hexColorStr).replace('#', '').trim();
@@ -161,13 +162,9 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
     }
   }
 
-  // 投稿時刻（ISO 8601フォーマット）
   const isoTimestamp = new Date(pubTime > 0 ? pubTime : Date.now()).toISOString();
-
-  // カード下部のアイコン（カスタム指定があればそれ、無ければ自動取得アイコン）
   const footerIcon = customIconUrl || defaultIconUrl;
 
-  // Embed構造の作成
   const embed = {
     title: title,
     url: safeLink,
@@ -184,7 +181,6 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
     embed.image = { url: imageUrl };
   }
 
-  // ペイロード構築
   const payload = {
     content: title,
     embeds: [embed]
@@ -214,33 +210,37 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
 }
 
 /**
- * RSSアイテムから画像を抽出する関数（HTMLエンコード対応強化版）
+ * RSSアイテムから画像を抽出する関数（詳細ログ出力版）
  */
-function getImageUrlFromItem(item) {
+function getImageUrlFromItem(item, itemTitle) {
   const children = item.getChildren();
+
+  // 1. 専用タグ (<media:thumbnail> / <media:content> / <enclosure>) から抽出
   for (let i = 0; i < children.length; i++) {
     const child = children[i];
     const name = child.getName().toLowerCase();
 
-    // <media:thumbnail url="..." /> または <media:content url="..." />
     if (name === 'thumbnail' || name === 'content') {
       const urlAttr = child.getAttribute('url');
-      if (urlAttr) return urlAttr.getValue();
+      if (urlAttr) {
+        console.log(`[画像抽出] <media:${name}> から取得 (${itemTitle}): ${urlAttr.getValue()}`);
+        return urlAttr.getValue();
+      }
     }
-    // <enclosure url="..." type="image/..." />
     if (name === 'enclosure') {
       const typeAttr = child.getAttribute('type');
       const urlAttr = child.getAttribute('url');
       if (urlAttr && typeAttr && typeAttr.getValue().startsWith('image/')) {
+        console.log(`[画像抽出] <enclosure> から取得 (${itemTitle}): ${urlAttr.getValue()}`);
         return urlAttr.getValue();
       }
     }
   }
 
-  // 本文（encoded, description, content）を取得
+  // 2. 本文（encoded / description / content）から <img> タグを抽出
   let description = getElementTextByNames(item, ['encoded', 'description', 'content']);
   if (description) {
-    // &lt;img src="..." &gt; などのエスケープ文字をデコード
+    // HTMLデコード
     description = description
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
@@ -248,15 +248,21 @@ function getImageUrlFromItem(item) {
       .replace(/&#039;/g, "'")
       .replace(/&amp;/g, '&');
 
-    // <img> タグの src 属性から画像URLを抽出
+    // <img> タグを探す
     const imgMatch = description.match(/<img[^>]+src=["']([^"']+)["']/i);
     if (imgMatch && imgMatch[1]) {
       const imgSrc = imgMatch[1];
-      // スマイリーやアイコン画像を除外
       if (!imgSrc.includes('/smilies/') && !imgSrc.includes('emoji')) {
+        console.log(`[画像抽出] 本文<img>タグから取得 (${itemTitle}): ${imgSrc}`);
         return imgSrc;
+      } else {
+        console.log(`[画像抽出スキップ] スマイリー/絵文字のため除外 (${itemTitle}): ${imgSrc}`);
       }
+    } else {
+      console.log(`[画像抽出なし] 本文に <img> タグが見つかりませんでした (${itemTitle})`);
     }
+  } else {
+    console.log(`[画像抽出なし] 本文(description/encoded)自体が存在しません (${itemTitle})`);
   }
 
   return null;
