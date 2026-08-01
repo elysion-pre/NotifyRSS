@@ -103,7 +103,6 @@ function checkRssAndNotifyDiscord() {
         }
       });
 
-      // 初回登録処理
       if (isFirstTime) {
         const recordTime = latestPublishedTime > 0 ? new Date(latestPublishedTime) : new Date();
         sheet.getRange(rowIndex, 8).setValue(recordTime);
@@ -111,7 +110,6 @@ function checkRssAndNotifyDiscord() {
         return;
       }
 
-      // 2回目以降：通知送信
       if (newPosts.length > 0) {
         console.log(`[新着あり] 行 ${rowIndex}: "${siteName}" から ${newPosts.length} 件の新規記事があります。`);
         
@@ -141,17 +139,26 @@ function checkRssAndNotifyDiscord() {
 }
 
 /**
- * 画像抽出ロジック（アイキャッチメタデータ最優先構造）
+ * 画像抽出ロジック（アイキャッチ優先＆OGPフォールバック）
  */
 function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
-  // 優先度1: WordPress標準等のアイキャッチメタデータ(media:content, media:thumbnail, enclosure)を探す
+  // 優先度1: 記事ページへアクセスして OGP (og:image) を直接取得する（これが一番正確）
+  if (itemLink && (itemLink.startsWith('http://') || itemLink.startsWith('https://'))) {
+    const ogImage = fetchOgImageFromUrl(itemLink);
+    if (ogImage) {
+      console.log(`[画像抽出:WebページOGP] (${itemTitle}): ${ogImage}`);
+      return ogImage;
+    }
+  }
+
+  // 優先度2: メタデータ(media:content, media:thumbnail, enclosure)を探す
   const metaImage = findFeaturedImageInXml(item);
   if (metaImage) {
     console.log(`[画像抽出:アイキャッチメタデータ] (${itemTitle}): ${metaImage}`);
     return metaImage;
   }
 
-  // 優先度2: RSS本文(encoded/description) 内から1枚目のコンテンツ画像を抽出
+  // 優先度3: RSS本文(encoded/description) 内から画像を抽出
   const htmlContents = getAllHtmlContents(item);
   for (let j = 0; j < htmlContents.length; j++) {
     let rawHtml = decodeHtmlEntitiesFully(htmlContents[j]);
@@ -173,26 +180,16 @@ function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
     }
   }
 
-  // 優先度3: RSS内に画像情報が一切ない場合、記事Webページへアクセスして OGP (og:image) を取得
-  if (itemLink && (itemLink.startsWith('http://') || itemLink.startsWith('https://'))) {
-    const ogImage = fetchOgImageFromUrl(itemLink);
-    if (ogImage) {
-      console.log(`[画像抽出:WebページOGP] (${itemTitle}): ${ogImage}`);
-      return ogImage;
-    }
-  }
-
   console.log(`[画像抽出なし] (${itemTitle})`);
   return null;
 }
 
 /**
- * XMLからアイキャッチ画像メタデータ(media:content/thumbnail, enclosure)を正確に特定
+ * XMLからアイキャッチ画像メタデータ(media:content/thumbnail, enclosure)を検索
  */
 function findFeaturedImageInXml(element) {
   const children = element.getChildren();
 
-  // 1. media:content または media:thumbnail タグを最優先検索
   for (let i = 0; i < children.length; i++) {
     const child = children[i];
     const name = child.getName().toLowerCase();
@@ -205,7 +202,6 @@ function findFeaturedImageInXml(element) {
     }
   }
 
-  // 2. enclosure タグのうち、画像タイプ(type="image/...")のものを抽出（動画などは弾く）
   for (let i = 0; i < children.length; i++) {
     const child = children[i];
     if (child.getName().toLowerCase() === 'enclosure') {
@@ -234,7 +230,11 @@ function cleanImageUrl(url) {
  */
 function fetchOgImageFromUrl(url) {
   try {
-    const encodedUrl = encodeURI(url);
+    // 二重エンコードを防ぐため、一度デコードしてから整形
+    let cleanUrl = url;
+    try { cleanUrl = decodeURIComponent(url); } catch (e) {}
+
+    const encodedUrl = encodeURI(cleanUrl);
     const options = {
       muteHttpExceptions: true,
       headers: {
@@ -259,7 +259,7 @@ function fetchOgImageFromUrl(url) {
 }
 
 /**
- * 有効な画像URLか判定（動画ファイル・広告・ツール用画像・アイコン類を厳格除外）
+ * 有効な画像URLか判定（動画・コメント用キャラ画像・アイコンなどを厳格除外）
  */
 function isValidImageUrl(url) {
   if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
@@ -269,7 +269,7 @@ function isValidImageUrl(url) {
   const lower = url.toLowerCase();
   const cleanPath = lower.split('?')[0].split('#')[0];
 
-  // 1. 動画ファイルの拡張子を厳格に除外
+  // 1. 動画ファイルの拡張子を除外
   const videoExtensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.m4v'];
   for (let i = 0; i < videoExtensions.length; i++) {
     if (cleanPath.endsWith(videoExtensions[i])) return false;
@@ -278,13 +278,14 @@ function isValidImageUrl(url) {
   // 2. GIF画像を除外
   if (cleanPath.endsWith('.gif')) return false;
 
-  // 3. 無効化したいキーワード（広告・アイコン・ロゴ等）の除外
+  // 3. コメントアイコン・装飾画像・広告・管理用画像を厳格除外
   const ignoreKeywords = [
+    'comment', 'chara', 'icon', 'avatar', 'res_', 'thumb_comment', // コメント用キャラ画像対策
     'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
     'pochipp', 'pochipp-logo', 'plugins/pochipp',
     '32381cb2.jpg', // サイト看板ロゴ
     '/smilies/', 'emoji', 'counter', 'facebook.com', 'twitter.com', 
-    'line.me', 'hatena', 'share', 'avatar', 'clear.gif', 
+    'line.me', 'hatena', 'share', 'clear.gif', 
     'blank.gif', 'pixel', 'ad_banner', 'logo_publisher'
   ];
 
@@ -302,9 +303,6 @@ function isValidImageUrl(url) {
   );
 }
 
-/**
- * HTMLテキストのマルチデコード
- */
 function decodeHtmlEntitiesFully(str) {
   if (!str) return '';
   let decoded = str;
@@ -320,9 +318,6 @@ function decodeHtmlEntitiesFully(str) {
   return decoded;
 }
 
-/**
- * item配下から本文テキスト領域を全取得
- */
 function getAllHtmlContents(parentElement) {
   const children = parentElement.getChildren();
   const contents = [];
@@ -342,9 +337,6 @@ function getAllHtmlContents(parentElement) {
   return contents;
 }
 
-/**
- * リンクURLを取得
- */
 function getLinkFromItem(item) {
   let rawLink = '';
   const linkText = getElementTextByNames(item, ['link']);
@@ -367,10 +359,17 @@ function getLinkFromItem(item) {
 }
 
 /**
- * Discord通知機能
+ * Discord通知機能（二重エンコード防止の安全デコードを実装）
  */
 function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, customIconUrl, defaultIconUrl, hexColorStr, imageUrl) {
-  const safeLink = encodeURI(link.replace(/[\r\n\t]/g, '').trim());
+  // 二重エンコードを防止：一度デコードしてから綺麗にエンコードし直す
+  let cleanLink = link;
+  try {
+    cleanLink = decodeURIComponent(link.replace(/[\r\n\t]/g, '').trim());
+  } catch (e) {
+    cleanLink = link.replace(/[\r\n\t]/g, '').trim();
+  }
+  const safeLink = encodeURI(cleanLink);
 
   let colorNum = 0x3498db;
   if (hexColorStr) {
@@ -395,7 +394,9 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
   };
 
   if (imageUrl) {
-    embed.image = { url: encodeURI(imageUrl) };
+    let cleanImageUrl = imageUrl;
+    try { cleanImageUrl = decodeURIComponent(imageUrl); } catch (e) {}
+    embed.image = { url: encodeURI(cleanImageUrl) };
   }
 
   const payload = {
