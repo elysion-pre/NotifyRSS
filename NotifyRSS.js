@@ -95,7 +95,6 @@ function checkRssAndNotifyDiscord() {
             latestPublishedTime = pubTime;
           }
         } else if (pubTime > lastNotifiedTime) {
-          // 新規記事の場合のみ画像抽出を実施（効率化のため）
           const imageUrl = getImageUrlFromItemOrWeb(item, title, link);
           newPosts.push({ title, link, pubTime, imageUrl });
           if (pubTime > latestPublishedTime) {
@@ -145,14 +144,24 @@ function checkRssAndNotifyDiscord() {
  * RSSおよびWebページから画像を最適抽出するハイブリッド関数
  */
 function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
-  // 1. XMLタグ構造からの判定
+  // 優先度1: 記事ページ（Web）からの OGP (og:image) 取得
+  // ※サイト全体の固定ロゴや広告画像を回避し、記事固有のアイキャッチを最優先で確実に取得するため
+  if (itemLink && (itemLink.startsWith('http://') || itemLink.startsWith('https://'))) {
+    const ogImage = fetchOgImageFromUrl(itemLink);
+    if (ogImage) {
+      console.log(`[画像抽出:WebページOGP] (${itemTitle}): ${ogImage}`);
+      return ogImage;
+    }
+  }
+
+  // 優先度2: XML専用タグ構造からの判定（media:thumbnail等）
   const foundInXml = findImageInElementRecursive(item);
   if (foundInXml) {
     console.log(`[画像抽出:XML構造] (${itemTitle}): ${foundInXml}`);
     return foundInXml;
   }
 
-  // 2. 本文HTMLからの判定（PochippやAmazonを除外）
+  // 優先度3: RSS本文HTMLからの判定
   const htmlContents = getAllHtmlContents(item);
   for (let j = 0; j < htmlContents.length; j++) {
     let rawHtml = decodeHtmlEntitiesFully(htmlContents[j]);
@@ -171,15 +180,6 @@ function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
         console.log(`[画像抽出:RSS本文] (${itemTitle}): ${imgSrc}`);
         return imgSrc;
       }
-    }
-  }
-
-  // 3. RSS内に画像がない場合、記事URL（Webページ）から og:image を取得
-  if (itemLink && (itemLink.startsWith('http://') || itemLink.startsWith('https://'))) {
-    const ogImage = fetchOgImageFromUrl(itemLink);
-    if (ogImage) {
-      console.log(`[画像抽出:WebページOGP] (${itemTitle}): ${ogImage}`);
-      return ogImage;
     }
   }
 
@@ -202,7 +202,6 @@ function fetchOgImageFromUrl(url) {
     if (res.getResponseCode() !== 200) return null;
 
     const html = res.getContentText();
-    // og:image タグを抽出
     const ogMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
                     html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
 
@@ -218,7 +217,7 @@ function fetchOgImageFromUrl(url) {
 }
 
 /**
- * 有効なアイキャッチ画像か判定（ポチップ、Amazon、アイコン、広告等を厳格に遮断）
+ * 有効なアイキャッチ画像か判定（固定アイコン・ロゴ・広告等を厳格に除外）
  */
 function isValidImageUrl(url) {
   if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
@@ -227,10 +226,11 @@ function isValidImageUrl(url) {
 
   const lower = url.toLowerCase();
 
-  // 強力除外キーワード（ポチップロゴ、Amazon、プラグイン、アフィリエイト、SNSアイコン等）
+  // 強力除外キーワード（サイト固定ロゴ、ポチップ、Amazon、アイコン、広告等）
   const ignoreKeywords = [
     'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
-    'pochipp', 'pochipp-logo', 'plugins/pochipp', // ポチッププラグイン画像
+    'pochipp', 'pochipp-logo', 'plugins/pochipp',
+    '32381cb2.jpg', // メガニケ速報のサイト固定画像
     'wp-includes', '/smilies/', 'emoji', 'counter', 'analy', 'facebook.com', 'twitter.com', 
     'line.me', 'hatena', 'share', 'avatar', 'button', 'icon', 'clear.gif', 
     'blank.gif', 'pixel', 'ad_banner', 'banner', 'widgets', 'logo_publisher'
