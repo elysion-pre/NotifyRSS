@@ -115,18 +115,28 @@ function checkRssAndNotifyDiscord() {
 
       // 2回目以降：通知送信
       if (newPosts.length > 0) {
-        console.log(`[新着あり] 行 ${rowIndex}: "${siteName}" から ${newPosts.length} 件の新規記事を送信します...`);
+        console.log(`[新着あり] 行 ${rowIndex}: "${siteName}" から ${newPosts.length} 件の新規記事があります。`);
         
+        // 古い順にソート
         newPosts.sort((a, b) => a.pubTime - b.pubTime);
 
-        newPosts.forEach((post, postIndex) => {
-          console.log(`  └ [送信 ${postIndex + 1}/${newPosts.length}] "${post.title}"`);
+        // レートリミット回避：一度に送信するのは最大5件まで
+        const postsToSend = newPosts.slice(0, 5);
+        if (newPosts.length > 5) {
+          console.warn(`  └ ※件数が多いため、今回の実行では先頭5件のみ送信します（残りは次回）。`);
+        }
+
+        postsToSend.forEach((post, postIndex) => {
+          console.log(`  └ [送信 ${postIndex + 1}/${postsToSend.length}] "${post.title}"`);
           sendDiscordEmbedNotification(webhookUrl, post.title, post.link, post.pubTime, siteName, customIconUrl, defaultIconUrl, colorHex, post.imageUrl);
-          Utilities.sleep(1000);
+          
+          // レートリミット（429エラー）回避のため 2.5秒 待機
+          Utilities.sleep(2500);
         });
 
-        // H列の最終取得日時を更新
-        sheet.getRange(rowIndex, 8).setValue(new Date(latestPublishedTime));
+        // H列の最終取得日時を更新（送信した最後の記事の日時を記録）
+        const lastSentPost = postsToSend[postsToSend.length - 1];
+        sheet.getRange(rowIndex, 8).setValue(new Date(lastSentPost.pubTime));
         console.log(`  └ 完了: H列の最終更新日時を更新しました。`);
       }
 
