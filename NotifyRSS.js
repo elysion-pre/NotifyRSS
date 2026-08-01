@@ -83,7 +83,7 @@ function checkRssAndNotifyDiscord() {
         const link = getLinkFromItem(item);
         const pubDateStr = getElementTextByNames(item, ['date', 'pubdate', 'published', 'updated']);
         
-        // 全RSSに対応した万能画像抽出
+        // 強化版画像抽出ロジック
         const imageUrl = getImageUrlFromItem(item, title);
         
         let pubTime = 0;
@@ -148,7 +148,8 @@ function checkRssAndNotifyDiscord() {
  * Discord WebhookへEmbed（カード）形式で通知を送信する関数
  */
 function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, customIconUrl, defaultIconUrl, hexColorStr, imageUrl) {
-  const safeLink = encodeURI(link);
+  // 安全なクリーンURL（二重エンコード防止）
+  const safeLink = link.replace(/[\r\n\t]/g, '').trim();
 
   let colorNum = 0x3498db;
   if (hexColorStr) {
@@ -205,69 +206,43 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
 }
 
 /**
- * RSSアイテムから画像を抽出する強化関数
+ * RSSアイテムから画像を抽出する完全網羅関数
  */
 function getImageUrlFromItem(item, itemTitle) {
-  const children = item.getChildren();
-
-  // 1. 専用タグ (<media:thumbnail>, <media:content>, <enclosure>, <image> 等) を属性含めすべてチェック
-  for (let i = 0; i < children.length; i++) {
-    const child = children[i];
-    const name = child.getName().toLowerCase();
-
-    // <image> タグ（テキストまたは直下のurl）
-    if (name === 'image') {
-      const imgText = child.getText();
-      if (imgText && imgText.startsWith('http')) {
-        console.log(`[画像抽出] <image> から取得 (${itemTitle}): ${imgText}`);
-        return imgText;
-      }
-      const urlChild = getChildByLocalName(child, 'url');
-      if (urlChild && urlChild.getText().startsWith('http')) {
-        console.log(`[画像抽出] <image><url> から取得 (${itemTitle}): ${urlChild.getText()}`);
-        return urlChild.getText();
-      }
-    }
-
-    // 属性から URL を探索 (url, href 等)
-    const attributes = child.getAttributes();
-    for (let j = 0; j < attributes.length; j++) {
-      const attrVal = attributes[j].getValue();
-      if (attrVal && isImageUrl(attrVal)) {
-        console.log(`[画像抽出] <${name}> 属性から取得 (${itemTitle}): ${attrVal}`);
-        return attrVal;
-      }
-    }
+  // 1. XML要素の深さ優先再帰探索（4Gamer / Game Watch 等の全属性・名前空間付きタグに対応）
+  const foundInXml = findImageInElementRecursive(item);
+  if (foundInXml) {
+    console.log(`[画像抽出:XML構造] (${itemTitle}): ${foundInXml}`);
+    return foundInXml;
   }
 
-  // 2. 本文HTMLから <img> タグを抽出 (encoded, content, description 等)
+  // 2. 本文HTMLから <img> タグを抽出（data-src, srcset などの Lazy Load にも対応）
   const htmlContents = getAllHtmlContents(item);
 
   for (let j = 0; j < htmlContents.length; j++) {
     let rawHtml = htmlContents[j];
     if (!rawHtml) continue;
 
-    // HTML特殊文字のエスケープ解除
     rawHtml = decodeHtmlEntities(rawHtml);
 
-    // <img> タグから src 属性を取り出す正規表現
-    const imgRegex = /<img[^>]+src=["']([^"']+)["']/gi;
+    // src, data-src, data-original, srcset 属性から画像を抽出
+    const imgRegex = /<img[^>]+(?:src|data-src|data-original|srcset)=["']([^"'\s>]+)["']/gi;
     let match;
 
     while ((match = imgRegex.exec(rawHtml)) !== null) {
-      const imgSrc = match[1];
+      let imgSrc = match[1];
 
-      // スマイリー・カウンター・アクセス解析用などの不要画像を除外
-      if (
-        imgSrc &&
-        !imgSrc.includes('/smilies/') &&
-        !imgSrc.includes('emoji') &&
-        !imgSrc.includes('counter') &&
-        !imgSrc.includes('analy') &&
-        !imgSrc.includes('facebook.com') &&
-        !imgSrc.includes('twitter.com')
-      ) {
-        console.log(`[画像抽出] 本文HTMLから取得 (${itemTitle}): ${imgSrc}`);
+      // srcset の場合はカンマ区切りの最初のURLを採用
+      if (imgSrc.includes(',')) {
+        imgSrc = imgSrc.split(',')[0].trim().split(' ')[0];
+      }
+
+      if (imgSrc.startsWith('//')) {
+        imgSrc = 'https:' + imgSrc;
+      }
+
+      if (isValidImageUrl(imgSrc)) {
+        console.log(`[画像抽出:HTML本文] (${itemTitle}): ${imgSrc}`);
         return imgSrc;
       }
     }
@@ -278,22 +253,121 @@ function getImageUrlFromItem(item, itemTitle) {
 }
 
 /**
- * 渡された文字列が画像URLっぽいか判定
+ * XML要素および子要素・属性を再帰的に全走査して画像URLを探索
  */
-function isImageUrl(url) {
-  if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
-  const cleanUrl = url.toLowerCase().split('?')[0];
-  return cleanUrl.endsWith('.jpg') || 
-         cleanUrl.endsWith('.jpeg') || 
-         cleanUrl.endsWith('.png') || 
-         cleanUrl.endsWith('.webp') ||
-         url.includes('jpg') ||
-         url.includes('png') ||
-         url.includes('jpeg');
+function findImageInElementRecursive(element) {
+  const name = element.getName().toLowerCase();
+
+  // 1. 属性をチェック
+  const attributes = element.getAttributes();
+  for (let i = 0; i < attributes.length; i++) {
+    const val = attributes[i].getValue();
+    if (val) {
+      let cleanVal = val.replace(/[\r\n\t]/g, '').trim();
+      if (cleanVal.startsWith('//')) cleanVal = 'https:' + cleanVal;
+      
+      if (['thumbnail', 'content', 'enclosure', 'image'].includes(name) || attributes[i].getName().toLowerCase() === 'url') {
+        if (isValidImageUrl(cleanVal)) {
+          return cleanVal;
+        }
+      }
+    }
+  }
+
+  // 2. 要素自身のテキストをチェック（例: <image>https://...</image>）
+  if (['image', 'thumbnail', 'enclosure'].includes(name)) {
+    const text = element.getText();
+    if (text) {
+      let cleanText = text.replace(/[\r\n\t]/g, '').trim();
+      if (cleanText.startsWith('//')) cleanText = 'https:' + cleanText;
+      if (isValidImageUrl(cleanText)) {
+        return cleanText;
+      }
+    }
+  }
+
+  // 3. 子要素を再帰的に探索
+  const children = element.getChildren();
+  for (let i = 0; i < children.length; i++) {
+    const res = findImageInElementRecursive(children[i]);
+    if (res) return res;
+  }
+
+  return null;
 }
 
 /**
- * item配下から encoded / content / description などのHTMLテキストを網羅して取得
+ * 有効な記事画像URLか判定（アイコンや不要画像を除外）
+ */
+function isValidImageUrl(url) {
+  if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+    return false;
+  }
+
+  const lower = url.toLowerCase();
+
+  // 除外キーワード
+  const ignoreKeywords = [
+    '/smilies/', 'emoji', 'counter', 'analy', 'facebook.com', 
+    'twitter.com', 'line.me', 'hatena', 'share', 'avatar',
+    'button', 'icon', 'clear.gif', 'blank.gif', 'pixel'
+  ];
+
+  for (let i = 0; i < ignoreKeywords.length; i++) {
+    if (lower.includes(ignoreKeywords[i])) return false;
+  }
+
+  // .gif はドットアイコンが多いため除外
+  if (lower.split('?')[0].endsWith('.gif')) return false;
+
+  return (
+    lower.includes('.jpg') ||
+    lower.includes('.jpeg') ||
+    lower.includes('.png') ||
+    lower.includes('.webp') ||
+    lower.includes('/image') ||
+    lower.includes('/img') ||
+    lower.includes('/photos/') ||
+    lower.includes('/media/')
+  );
+}
+
+/**
+ * リンクURLを正確に取得（改行・空白の完全除去）
+ */
+function getLinkFromItem(item) {
+  let rawLink = '';
+
+  const linkText = getElementTextByNames(item, ['link']);
+  if (linkText) {
+    rawLink = linkText;
+  } else {
+    const children = item.getChildren();
+    for (let i = 0; i < children.length; i++) {
+      if (children[i].getName().toLowerCase() === 'link') {
+        const hrefAttr = children[i].getAttribute('href');
+        if (hrefAttr && hrefAttr.getValue()) {
+          rawLink = hrefAttr.getValue();
+          break;
+        }
+      }
+    }
+  }
+
+  if (rawLink) {
+    // 改行コード(\r, \n)、タブ(\t)、前後の空白を削除
+    let cleanUrl = rawLink.replace(/[\r\n\t]/g, '').trim();
+    if (cleanUrl.startsWith('//')) {
+      cleanUrl = 'https:' + cleanUrl;
+    }
+    return cleanUrl;
+  }
+
+  return '';
+}
+
+/**
+ * item配下から encoded / content / description / summary などのHTML要素を取得
  */
 function getAllHtmlContents(parentElement) {
   const children = parentElement.getChildren();
@@ -316,30 +390,7 @@ function getAllHtmlContents(parentElement) {
 }
 
 /**
- * リンクURLを正確に取得（Atom形式の属性 link href="..." に対応）
- */
-function getLinkFromItem(item) {
-  // 1. テキストとしてURLが入っている場合
-  const linkText = getElementTextByNames(item, ['link']);
-  if (linkText && linkText.trim().startsWith('http')) {
-    return linkText.trim();
-  }
-
-  // 2. 属性（href）としてURLが入っている場合 (Atomフィード等)
-  const children = item.getChildren();
-  for (let i = 0; i < children.length; i++) {
-    if (children[i].getName().toLowerCase() === 'link') {
-      const hrefAttr = children[i].getAttribute('href');
-      if (hrefAttr && hrefAttr.getValue()) {
-        return hrefAttr.getValue().trim();
-      }
-    }
-  }
-  return '';
-}
-
-/**
- * HTML特殊文字の多重デコード関数
+ * HTML特殊文字のデコード関数
  */
 function decodeHtmlEntities(str) {
   if (!str) return '';
