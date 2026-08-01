@@ -141,19 +141,10 @@ function checkRssAndNotifyDiscord() {
 }
 
 /**
- * RSSおよびWebページから画像を最適抽出するハイブリッド関数
+ * RSS本文優先 ＋ Web OGP補完のハイブリッド画像抽出関数
  */
 function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
-  // 1. まず Web ページからの OGP 取得を試みる
-  if (itemLink && (itemLink.startsWith('http://') || itemLink.startsWith('https://'))) {
-    const ogImage = fetchOgImageFromUrl(itemLink);
-    if (ogImage) {
-      console.log(`[画像抽出:WebページOGP] (${itemTitle}): ${ogImage}`);
-      return ogImage;
-    }
-  }
-
-  // 2. OGP が取れない場合、RSS 本文(encoded/description) 内の <img> を抽出
+  // 優先度1: RSS 本文(encoded/description) 内からコンテンツ画像を直接抽出
   const htmlContents = getAllHtmlContents(item);
   for (let j = 0; j < htmlContents.length; j++) {
     let rawHtml = decodeHtmlEntitiesFully(htmlContents[j]);
@@ -175,11 +166,20 @@ function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
     }
   }
 
-  // 3. XMLタグ構造の確認
+  // 優先度2: XML専用タグ構造（media:content / enclosure 等）の確認
   const foundInXml = findImageInElementRecursive(item);
   if (foundInXml) {
     console.log(`[画像抽出:XML構造] (${itemTitle}): ${foundInXml}`);
     return foundInXml;
+  }
+
+  // 優先度3: RSS内に画像がない場合のみ、記事Webページへアクセスして og:image を取得（GIGAZINE等用）
+  if (itemLink && (itemLink.startsWith('http://') || itemLink.startsWith('https://'))) {
+    const ogImage = fetchOgImageFromUrl(itemLink);
+    if (ogImage) {
+      console.log(`[画像抽出:WebページOGP] (${itemTitle}): ${ogImage}`);
+      return ogImage;
+    }
   }
 
   console.log(`[画像抽出なし] (${itemTitle})`);
@@ -356,7 +356,7 @@ function getLinkFromItem(item) {
 }
 
 /**
- * Discord通知機能（URLエンコードを標準適用してカード崩れを強力防護）
+ * Discord通知機能
  */
 function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, customIconUrl, defaultIconUrl, hexColorStr, imageUrl) {
   const safeLink = encodeURI(link.replace(/[\r\n\t]/g, '').trim());
