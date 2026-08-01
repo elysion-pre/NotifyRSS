@@ -141,11 +141,10 @@ function checkRssAndNotifyDiscord() {
 }
 
 /**
- * RSSおよびWebページから画像を最適抽出するハイブリッド関数
+ * RSSおよびWebページから画像を最適抽出するハイブリッド関数（高成功率版）
  */
 function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
-  // 優先度1: 記事ページ（Web）からの OGP (og:image) 取得
-  // ※サイト全体の固定ロゴや広告画像を回避し、記事固有のアイキャッチを最優先で確実に取得するため
+  // 1. まず Web ページからの OGP 取得を試みる
   if (itemLink && (itemLink.startsWith('http://') || itemLink.startsWith('https://'))) {
     const ogImage = fetchOgImageFromUrl(itemLink);
     if (ogImage) {
@@ -154,14 +153,7 @@ function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
     }
   }
 
-  // 優先度2: XML専用タグ構造からの判定（media:thumbnail等）
-  const foundInXml = findImageInElementRecursive(item);
-  if (foundInXml) {
-    console.log(`[画像抽出:XML構造] (${itemTitle}): ${foundInXml}`);
-    return foundInXml;
-  }
-
-  // 優先度3: RSS本文HTMLからの判定
+  // 2. OGP が取れない・存在しない場合、RSS 本文(encoded/description) 内の <img> を抽出
   const htmlContents = getAllHtmlContents(item);
   for (let j = 0; j < htmlContents.length; j++) {
     let rawHtml = decodeHtmlEntitiesFully(htmlContents[j]);
@@ -181,6 +173,13 @@ function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
         return imgSrc;
       }
     }
+  }
+
+  // 3. XMLタグ構造（media:content / enclosure 等）の確認
+  const foundInXml = findImageInElementRecursive(item);
+  if (foundInXml) {
+    console.log(`[画像抽出:XML構造] (${itemTitle}): ${foundInXml}`);
+    return foundInXml;
   }
 
   console.log(`[画像抽出なし] (${itemTitle})`);
@@ -217,7 +216,7 @@ function fetchOgImageFromUrl(url) {
 }
 
 /**
- * 有効なアイキャッチ画像か判定（固定アイコン・ロゴ・広告等を厳格に除外）
+ * 有効なアイキャッチ画像か判定（アイコン・広告・ポチップ・Amazonのみピンポイントで除外）
  */
 function isValidImageUrl(url) {
   if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
@@ -226,14 +225,14 @@ function isValidImageUrl(url) {
 
   const lower = url.toLowerCase();
 
-  // 強力除外キーワード（サイト固定ロゴ、ポチップ、Amazon、アイコン、広告等）
+  // ピンポイントで広告・ツール用画像のみ遮断（過度な除外を回避）
   const ignoreKeywords = [
     'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
     'pochipp', 'pochipp-logo', 'plugins/pochipp',
-    '32381cb2.jpg', // メガニケ速報のサイト固定画像
-    'wp-includes', '/smilies/', 'emoji', 'counter', 'analy', 'facebook.com', 'twitter.com', 
-    'line.me', 'hatena', 'share', 'avatar', 'button', 'icon', 'clear.gif', 
-    'blank.gif', 'pixel', 'ad_banner', 'banner', 'widgets', 'logo_publisher'
+    '32381cb2.jpg', // サイトロゴ看板画像
+    '/smilies/', 'emoji', 'counter', 'facebook.com', 'twitter.com', 
+    'line.me', 'hatena', 'share', 'avatar', 'clear.gif', 
+    'blank.gif', 'pixel', 'ad_banner', 'logo_publisher'
   ];
 
   for (let i = 0; i < ignoreKeywords.length; i++) {
@@ -242,12 +241,13 @@ function isValidImageUrl(url) {
 
   if (lower.split('?')[0].endsWith('.gif')) return false;
 
+  // wp-content/uploads/ 配下、あるいは主要画像形式であれば有効とみなす
   return (
+    lower.includes('wp-content/uploads') ||
     lower.includes('.jpg') ||
     lower.includes('.jpeg') ||
     lower.includes('.png') ||
-    lower.includes('.webp') ||
-    lower.includes('wp-content/uploads')
+    lower.includes('.webp')
   );
 }
 
