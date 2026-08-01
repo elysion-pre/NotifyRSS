@@ -149,7 +149,8 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
   let colorNum = 0x3498db; // デフォルト：青
   if (hexColorStr) {
     const cleanHex = String(hexColorStr).replace('#', '').trim();
-    if (/^[0-9A-Fa-F]{6}$/.test(cleanHex)) {
+    // 長さが6桁かつ16進数として正しく変換できるか判定（正規表現不使用）
+    if (cleanHex.length === 6 && !isNaN(parseInt(cleanHex, 16))) {
       colorNum = parseInt(cleanHex, 16);
     }
   }
