@@ -205,7 +205,7 @@ function findFeaturedImageInXml(element) {
     }
   }
 
-  // 2. enclosure タグのうち、画像タイプ(type="image/...")のものを抽出
+  // 2. enclosure タグのうち、画像タイプ(type="image/...")のものを抽出（動画などは弾く）
   for (let i = 0; i < children.length; i++) {
     const child = children[i];
     if (child.getName().toLowerCase() === 'enclosure') {
@@ -259,7 +259,7 @@ function fetchOgImageFromUrl(url) {
 }
 
 /**
- * 有効な画像URLか判定（広告・ツール用画像・アイコン類を除外）
+ * 有効な画像URLか判定（動画ファイル・広告・ツール用画像・アイコン類を厳格除外）
  */
 function isValidImageUrl(url) {
   if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
@@ -267,7 +267,18 @@ function isValidImageUrl(url) {
   }
 
   const lower = url.toLowerCase();
+  const cleanPath = lower.split('?')[0].split('#')[0];
 
+  // 1. 動画ファイルの拡張子を厳格に除外
+  const videoExtensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.m4v'];
+  for (let i = 0; i < videoExtensions.length; i++) {
+    if (cleanPath.endsWith(videoExtensions[i])) return false;
+  }
+
+  // 2. GIF画像を除外
+  if (cleanPath.endsWith('.gif')) return false;
+
+  // 3. 無効化したいキーワード（広告・アイコン・ロゴ等）の除外
   const ignoreKeywords = [
     'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
     'pochipp', 'pochipp-logo', 'plugins/pochipp',
@@ -281,14 +292,13 @@ function isValidImageUrl(url) {
     if (lower.includes(ignoreKeywords[i])) return false;
   }
 
-  if (lower.split('?')[0].endsWith('.gif')) return false;
-
+  // 4. 静止画フォーマットの判定
   return (
     lower.includes('wp-content/uploads') ||
-    lower.includes('.jpg') ||
-    lower.includes('.jpeg') ||
-    lower.includes('.png') ||
-    lower.includes('.webp')
+    cleanPath.endsWith('.jpg') ||
+    cleanPath.endsWith('.jpeg') ||
+    cleanPath.endsWith('.png') ||
+    cleanPath.endsWith('.webp')
   );
 }
 
