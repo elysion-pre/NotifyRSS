@@ -179,10 +179,9 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
     timestamp: isoTimestamp
   };
 
-  // サムネイル画像（アイキャッチ）があれば追加
+  // メイン画像（カード下部の大きな画像）として追加
   if (imageUrl) {
     embed.image = { url: imageUrl };
-    console.log(`記事画像URL: ${embed.image}`);
   }
 
   // ペイロード構築
