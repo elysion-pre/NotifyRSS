@@ -83,9 +83,6 @@ function checkRssAndNotifyDiscord() {
         const link = getLinkFromItem(item);
         const pubDateStr = getElementTextByNames(item, ['date', 'pubdate', 'published', 'updated']);
         const imageUrl = getImageUrlFromItem(item); // 記事画像（アイキャッチ）の取得
-        if (imageUrl) {
-          console.log(`記事画像URL: ${imageUrl}`);
-        }
         
         let pubTime = 0;
         if (pubDateStr) {
@@ -185,6 +182,7 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
   // サムネイル画像（アイキャッチ）があれば追加
   if (imageUrl) {
     embed.thumbnail = { url: imageUrl };
+    console.log(`記事画像URL: ${embed.thumbnail}`);
   }
 
   // ペイロード構築
