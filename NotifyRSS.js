@@ -72,11 +72,8 @@ function checkRssAndNotifyDiscord() {
         siteName = getElementTextByNames(root, ['title']);
       }
 
-      let iconUrl = customIconUrl;
-      if (!iconUrl) {
-        const domain = getDomainFromUrl(rssUrl);
-        iconUrl = domain ? `https://icons.duckduckgo.com/ip3/${domain}.ico` : '';
-      }
+      const domain = getDomainFromUrl(rssUrl);
+      const defaultIconUrl = domain ? `https://icons.duckduckgo.com/ip3/${domain}.ico` : '';
 
       let latestPublishedTime = lastNotifiedTime;
       const newPosts = [];
@@ -124,7 +121,7 @@ function checkRssAndNotifyDiscord() {
 
         newPosts.forEach((post, postIndex) => {
           console.log(`  └ [送信 ${postIndex + 1}/${newPosts.length}] "${post.title}"`);
-          sendDiscordEmbedNotification(webhookUrl, post.title, post.link, post.pubTime, siteName, iconUrl, colorHex, post.imageUrl);
+          sendDiscordEmbedNotification(webhookUrl, post.title, post.link, post.pubTime, siteName, customIconUrl, defaultIconUrl, colorHex, post.imageUrl);
           Utilities.sleep(1000);
         });
 
@@ -142,7 +139,7 @@ function checkRssAndNotifyDiscord() {
 /**
  * Discord WebhookへEmbed（カード）形式で通知を送信する関数
  */
-function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, iconUrl, hexColorStr, imageUrl) {
+function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, customIconUrl, defaultIconUrl, hexColorStr, imageUrl) {
   const safeLink = encodeURI(link);
 
   // 16進数カラーコードを整数（DEC）に変換（安全な判定）
@@ -157,6 +154,9 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
   // 投稿時刻（ISO 8601フォーマット）
   const isoTimestamp = new Date(pubTime > 0 ? pubTime : Date.now()).toISOString();
 
+  // カード下部のアイコン（カスタム指定があればそれ、無ければ自動取得アイコン）
+  const footerIcon = customIconUrl || defaultIconUrl;
+
   // Embed構造の作成
   const embed = {
     title: title,
@@ -164,7 +164,7 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
     color: colorNum,
     footer: {
       text: siteName || "RSS Feed",
-      icon_url: iconUrl || undefined
+      icon_url: footerIcon || undefined
     },
     timestamp: isoTimestamp
   };
@@ -174,12 +174,19 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
     embed.thumbnail = { url: imageUrl };
   }
 
+  // ペイロード構築
   const payload = {
-    content: title,                 // メッセージ本文（カード上部）
-    username: siteName || undefined, // Webhookの表示名にサイト名を設定
-    avatar_url: iconUrl || undefined, // Webhookのアバターにサイトアイコンを設定
+    content: title,
     embeds: [embed]
   };
+
+  if (siteName && siteName.trim() !== '') {
+    payload.username = siteName.substring(0, 80);
+  }
+  
+  if (customIconUrl && (customIconUrl.startsWith('http://') || customIconUrl.startsWith('https://'))) {
+    payload.avatar_url = customIconUrl;
+  }
 
   const options = {
     method: 'post',
@@ -188,7 +195,12 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
     muteHttpExceptions: true
   };
 
-  UrlFetchApp.fetch(webhookUrl, options);
+  const response = UrlFetchApp.fetch(webhookUrl, options);
+  const responseCode = response.getResponseCode();
+
+  if (responseCode < 200 || responseCode >= 300) {
+    console.error(`[Discord送信失敗] HTTP ${responseCode}: ${response.getContentText()}`);
+  }
 }
 
 /**
