@@ -141,7 +141,7 @@ function checkRssAndNotifyDiscord() {
 }
 
 /**
- * RSSおよびWebページから画像を最適抽出するハイブリッド関数（高成功率版）
+ * RSSおよびWebページから画像を最適抽出するハイブリッド関数
  */
 function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
   // 1. まず Web ページからの OGP 取得を試みる
@@ -153,7 +153,7 @@ function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
     }
   }
 
-  // 2. OGP が取れない・存在しない場合、RSS 本文(encoded/description) 内の <img> を抽出
+  // 2. OGP が取れない場合、RSS 本文(encoded/description) 内の <img> を抽出
   const htmlContents = getAllHtmlContents(item);
   for (let j = 0; j < htmlContents.length; j++) {
     let rawHtml = decodeHtmlEntitiesFully(htmlContents[j]);
@@ -175,7 +175,7 @@ function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
     }
   }
 
-  // 3. XMLタグ構造（media:content / enclosure 等）の確認
+  // 3. XMLタグ構造の確認
   const foundInXml = findImageInElementRecursive(item);
   if (foundInXml) {
     console.log(`[画像抽出:XML構造] (${itemTitle}): ${foundInXml}`);
@@ -191,13 +191,14 @@ function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
  */
 function fetchOgImageFromUrl(url) {
   try {
+    const encodedUrl = encodeURI(url);
     const options = {
       muteHttpExceptions: true,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       }
     };
-    const res = UrlFetchApp.fetch(url, options);
+    const res = UrlFetchApp.fetch(encodedUrl, options);
     if (res.getResponseCode() !== 200) return null;
 
     const html = res.getContentText();
@@ -216,7 +217,7 @@ function fetchOgImageFromUrl(url) {
 }
 
 /**
- * 有効なアイキャッチ画像か判定（アイコン・広告・ポチップ・Amazonのみピンポイントで除外）
+ * 有効なアイキャッチ画像か判定（アイコン・広告・ポチップ・Amazonのみ除外）
  */
 function isValidImageUrl(url) {
   if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
@@ -225,11 +226,10 @@ function isValidImageUrl(url) {
 
   const lower = url.toLowerCase();
 
-  // ピンポイントで広告・ツール用画像のみ遮断（過度な除外を回避）
   const ignoreKeywords = [
     'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
     'pochipp', 'pochipp-logo', 'plugins/pochipp',
-    '32381cb2.jpg', // サイトロゴ看板画像
+    '32381cb2.jpg',
     '/smilies/', 'emoji', 'counter', 'facebook.com', 'twitter.com', 
     'line.me', 'hatena', 'share', 'avatar', 'clear.gif', 
     'blank.gif', 'pixel', 'ad_banner', 'logo_publisher'
@@ -241,7 +241,6 @@ function isValidImageUrl(url) {
 
   if (lower.split('?')[0].endsWith('.gif')) return false;
 
-  // wp-content/uploads/ 配下、あるいは主要画像形式であれば有効とみなす
   return (
     lower.includes('wp-content/uploads') ||
     lower.includes('.jpg') ||
@@ -357,10 +356,10 @@ function getLinkFromItem(item) {
 }
 
 /**
- * Discord通知機能
+ * Discord通知機能（URLエンコードを標準適用してカード崩れを強力防護）
  */
 function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, customIconUrl, defaultIconUrl, hexColorStr, imageUrl) {
-  const safeLink = link.replace(/[\r\n\t]/g, '').trim();
+  const safeLink = encodeURI(link.replace(/[\r\n\t]/g, '').trim());
 
   let colorNum = 0x3498db;
   if (hexColorStr) {
@@ -379,13 +378,13 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
     color: colorNum,
     footer: {
       text: siteName || "RSS Feed",
-      icon_url: footerIcon || undefined
+      icon_url: footerIcon ? encodeURI(footerIcon) : undefined
     },
     timestamp: isoTimestamp
   };
 
   if (imageUrl) {
-    embed.image = { url: imageUrl };
+    embed.image = { url: encodeURI(imageUrl) };
   }
 
   const payload = {
@@ -398,7 +397,7 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
   }
   
   if (customIconUrl && (customIconUrl.startsWith('http://') || customIconUrl.startsWith('https://'))) {
-    payload.avatar_url = customIconUrl;
+    payload.avatar_url = encodeURI(customIconUrl);
   }
 
   const options = {
