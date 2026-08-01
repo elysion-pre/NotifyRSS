@@ -81,9 +81,6 @@ function checkRssAndNotifyDiscord() {
         const link = getLinkFromItem(item);
         const pubDateStr = getElementTextByNames(item, ['date', 'pubdate', 'published', 'updated']);
         
-        // 強化型画像抽出
-        const imageUrl = getImageUrlFromItem(item, title);
-        
         let pubTime = 0;
         if (pubDateStr) {
           pubTime = new Date(pubDateStr).getTime();
@@ -98,6 +95,8 @@ function checkRssAndNotifyDiscord() {
             latestPublishedTime = pubTime;
           }
         } else if (pubTime > lastNotifiedTime) {
+          // 新規記事の場合のみ画像抽出を実施（効率化のため）
+          const imageUrl = getImageUrlFromItemOrWeb(item, title, link);
           newPosts.push({ title, link, pubTime, imageUrl });
           if (pubTime > latestPublishedTime) {
             latestPublishedTime = pubTime;
@@ -143,7 +142,222 @@ function checkRssAndNotifyDiscord() {
 }
 
 /**
- * Discord WebhookへEmbed形式で通知を送信する関数
+ * RSSおよびWebページから画像を最適抽出するハイブリッド関数
+ */
+function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
+  // 1. XMLタグ構造からの判定
+  const foundInXml = findImageInElementRecursive(item);
+  if (foundInXml) {
+    console.log(`[画像抽出:XML構造] (${itemTitle}): ${foundInXml}`);
+    return foundInXml;
+  }
+
+  // 2. 本文HTMLからの判定（PochippやAmazonを除外）
+  const htmlContents = getAllHtmlContents(item);
+  for (let j = 0; j < htmlContents.length; j++) {
+    let rawHtml = decodeHtmlEntitiesFully(htmlContents[j]);
+    if (!rawHtml) continue;
+
+    const imgRegex = /<img[^>]+(?:src|data-src|data-original|srcset)=["']([^"'\s>]+)["']/gi;
+    let match;
+
+    while ((match = imgRegex.exec(rawHtml)) !== null) {
+      let imgSrc = match[1];
+
+      if (imgSrc.includes(',')) imgSrc = imgSrc.split(',')[0].trim().split(' ')[0];
+      if (imgSrc.startsWith('//')) imgSrc = 'https:' + imgSrc;
+
+      if (isValidImageUrl(imgSrc)) {
+        console.log(`[画像抽出:RSS本文] (${itemTitle}): ${imgSrc}`);
+        return imgSrc;
+      }
+    }
+  }
+
+  // 3. RSS内に画像がない場合、記事URL（Webページ）から og:image を取得
+  if (itemLink && (itemLink.startsWith('http://') || itemLink.startsWith('https://'))) {
+    const ogImage = fetchOgImageFromUrl(itemLink);
+    if (ogImage) {
+      console.log(`[画像抽出:WebページOGP] (${itemTitle}): ${ogImage}`);
+      return ogImage;
+    }
+  }
+
+  console.log(`[画像抽出なし] (${itemTitle})`);
+  return null;
+}
+
+/**
+ * 記事ページにアクセスして og:image を取得する関数
+ */
+function fetchOgImageFromUrl(url) {
+  try {
+    const options = {
+      muteHttpExceptions: true,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    };
+    const res = UrlFetchApp.fetch(url, options);
+    if (res.getResponseCode() !== 200) return null;
+
+    const html = res.getContentText();
+    // og:image タグを抽出
+    const ogMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+                    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+
+    if (ogMatch && ogMatch[1]) {
+      let ogUrl = ogMatch[1].trim();
+      if (ogUrl.startsWith('//')) ogUrl = 'https:' + ogUrl;
+      if (isValidImageUrl(ogUrl)) return ogUrl;
+    }
+  } catch (e) {
+    console.warn(`[OGP取得失敗] ${url}: ${e.message}`);
+  }
+  return null;
+}
+
+/**
+ * 有効なアイキャッチ画像か判定（ポチップ、Amazon、アイコン、広告等を厳格に遮断）
+ */
+function isValidImageUrl(url) {
+  if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+    return false;
+  }
+
+  const lower = url.toLowerCase();
+
+  // 強力除外キーワード（ポチップロゴ、Amazon、プラグイン、アフィリエイト、SNSアイコン等）
+  const ignoreKeywords = [
+    'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
+    'pochipp', 'pochipp-logo', 'plugins/pochipp', // ポチッププラグイン画像
+    'wp-includes', '/smilies/', 'emoji', 'counter', 'analy', 'facebook.com', 'twitter.com', 
+    'line.me', 'hatena', 'share', 'avatar', 'button', 'icon', 'clear.gif', 
+    'blank.gif', 'pixel', 'ad_banner', 'banner', 'widgets', 'logo_publisher'
+  ];
+
+  for (let i = 0; i < ignoreKeywords.length; i++) {
+    if (lower.includes(ignoreKeywords[i])) return false;
+  }
+
+  if (lower.split('?')[0].endsWith('.gif')) return false;
+
+  return (
+    lower.includes('.jpg') ||
+    lower.includes('.jpeg') ||
+    lower.includes('.png') ||
+    lower.includes('.webp') ||
+    lower.includes('wp-content/uploads')
+  );
+}
+
+/**
+ * XML要素および属性を再帰探索
+ */
+function findImageInElementRecursive(element) {
+  const name = element.getName().toLowerCase();
+
+  const attributes = element.getAttributes();
+  for (let i = 0; i < attributes.length; i++) {
+    const val = attributes[i].getValue();
+    if (val) {
+      let cleanVal = val.replace(/[\r\n\t]/g, '').trim();
+      if (cleanVal.startsWith('//')) cleanVal = 'https:' + cleanVal;
+      
+      if (['thumbnail', 'content', 'enclosure', 'image'].includes(name) || attributes[i].getName().toLowerCase() === 'url') {
+        if (isValidImageUrl(cleanVal)) {
+          return cleanVal;
+        }
+      }
+    }
+  }
+
+  if (['image', 'thumbnail', 'enclosure'].includes(name)) {
+    const text = element.getText();
+    if (text) {
+      let cleanText = text.replace(/[\r\n\t]/g, '').trim();
+      if (cleanText.startsWith('//')) cleanText = 'https:' + cleanText;
+      if (isValidImageUrl(cleanText)) {
+        return cleanText;
+      }
+    }
+  }
+
+  const children = element.getChildren();
+  for (let i = 0; i < children.length; i++) {
+    const res = findImageInElementRecursive(children[i]);
+    if (res) return res;
+  }
+
+  return null;
+}
+
+/**
+ * HTMLテキストのマルチデコード
+ */
+function decodeHtmlEntitiesFully(str) {
+  if (!str) return '';
+  let decoded = str;
+  for (let i = 0; i < 3; i++) {
+    decoded = decoded
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#039;/g, "'")
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, '&');
+  }
+  return decoded;
+}
+
+/**
+ * item配下から本文テキスト領域を全取得
+ */
+function getAllHtmlContents(parentElement) {
+  const children = parentElement.getChildren();
+  const contents = [];
+  const targetNames = ['encoded', 'content', 'description', 'summary'];
+
+  targetNames.forEach(target => {
+    for (let i = 0; i < children.length; i++) {
+      if (children[i].getName().toLowerCase() === target) {
+        const text = children[i].getText();
+        if (text && text.trim() !== '') {
+          contents.push(text);
+        }
+      }
+    }
+  });
+
+  return contents;
+}
+
+/**
+ * リンクURLを取得
+ */
+function getLinkFromItem(item) {
+  let rawLink = '';
+  const linkText = getElementTextByNames(item, ['link']);
+  if (linkText) {
+    rawLink = linkText;
+  } else {
+    const children = item.getChildren();
+    for (let i = 0; i < children.length; i++) {
+      if (children[i].getName().toLowerCase() === 'link') {
+        const hrefAttr = children[i].getAttribute('href');
+        if (hrefAttr && hrefAttr.getValue()) {
+          rawLink = hrefAttr.getValue();
+          break;
+        }
+      }
+    }
+  }
+
+  return rawLink ? rawLink.replace(/[\r\n\t]/g, '').trim() : '';
+}
+
+/**
+ * Discord通知機能
  */
 function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, customIconUrl, defaultIconUrl, hexColorStr, imageUrl) {
   const safeLink = link.replace(/[\r\n\t]/g, '').trim();
@@ -195,209 +409,9 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
   };
 
   const response = UrlFetchApp.fetch(webhookUrl, options);
-  const responseCode = response.getResponseCode();
-
-  if (responseCode < 200 || responseCode >= 300) {
-    console.error(`[Discord送信失敗] HTTP ${responseCode}: ${response.getContentText()}`);
+  if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) {
+    console.error(`[Discord送信失敗] HTTP ${response.getResponseCode()}: ${response.getContentText()}`);
   }
-}
-
-/**
- * RSSアイテムから画像を抽出する（メディア系・Amazon除外完全最適化版）
- */
-function getImageUrlFromItem(item, itemTitle) {
-  // 1. XML標準タグ/属性からの探索
-  const foundInXml = findImageInElementRecursive(item);
-  if (foundInXml) {
-    console.log(`[画像抽出:XML構造] (${itemTitle}): ${foundInXml}`);
-    return foundInXml;
-  }
-
-  // 2. 本文HTML(CDAT/encoded/content/description)の徹底探索
-  const htmlContents = getAllHtmlContents(item);
-
-  for (let j = 0; j < htmlContents.length; j++) {
-    let rawHtml = htmlContents[j];
-    if (!rawHtml) continue;
-
-    // デコードを複数回実施してエスケープ漏れ（4Gamer / Game Watch 等）を解読
-    rawHtml = decodeHtmlEntitiesFully(rawHtml);
-
-    // <img> タグの src, data-src, srcset 属性を取得
-    const imgRegex = /<img[^>]+(?:src|data-src|data-original|srcset)=["']([^"'\s>]+)["']/gi;
-    let match;
-
-    while ((match = imgRegex.exec(rawHtml)) !== null) {
-      let imgSrc = match[1];
-
-      if (imgSrc.includes(',')) {
-        imgSrc = imgSrc.split(',')[0].trim().split(' ')[0];
-      }
-
-      if (imgSrc.startsWith('//')) {
-        imgSrc = 'https:' + imgSrc;
-      }
-
-      // 有効画像チェック（Amazon等の広告画像を除外）
-      if (isValidImageUrl(imgSrc)) {
-        console.log(`[画像抽出:HTML本文] (${itemTitle}): ${imgSrc}`);
-        return imgSrc;
-      } else {
-        console.log(`[画像抽出除外(広告等)] (${itemTitle}): ${imgSrc}`);
-      }
-    }
-  }
-
-  console.log(`[画像抽出なし] (${itemTitle})`);
-  return null;
-}
-
-/**
- * XML要素および属性を再帰探索
- */
-function findImageInElementRecursive(element) {
-  const name = element.getName().toLowerCase();
-
-  const attributes = element.getAttributes();
-  for (let i = 0; i < attributes.length; i++) {
-    const val = attributes[i].getValue();
-    if (val) {
-      let cleanVal = val.replace(/[\r\n\t]/g, '').trim();
-      if (cleanVal.startsWith('//')) cleanVal = 'https:' + cleanVal;
-      
-      if (['thumbnail', 'content', 'enclosure', 'image'].includes(name) || attributes[i].getName().toLowerCase() === 'url') {
-        if (isValidImageUrl(cleanVal)) {
-          return cleanVal;
-        }
-      }
-    }
-  }
-
-  if (['image', 'thumbnail', 'enclosure'].includes(name)) {
-    const text = element.getText();
-    if (text) {
-      let cleanText = text.replace(/[\r\n\t]/g, '').trim();
-      if (cleanText.startsWith('//')) cleanText = 'https:' + cleanText;
-      if (isValidImageUrl(cleanText)) {
-        return cleanText;
-      }
-    }
-  }
-
-  const children = element.getChildren();
-  for (let i = 0; i < children.length; i++) {
-    const res = findImageInElementRecursive(children[i]);
-    if (res) return res;
-  }
-
-  return null;
-}
-
-/**
- * 有効なアイキャッチ画像か判定（Amazon等の広告・アイコン画像を遮断）
- */
-function isValidImageUrl(url) {
-  if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
-    return false;
-  }
-
-  const lower = url.toLowerCase();
-
-  // 除外ドメイン / 除外キーワード (Amazon商品画像、アフィリエイト、バナー、SNS関連)
-  const ignoreKeywords = [
-    'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
-    '/smilies/', 'emoji', 'counter', 'analy', 'facebook.com', 'twitter.com', 
-    'line.me', 'hatena', 'share', 'avatar', 'button', 'icon', 'clear.gif', 
-    'blank.gif', 'pixel', 'ad_banner', 'banner', 'widgets'
-  ];
-
-  for (let i = 0; i < ignoreKeywords.length; i++) {
-    if (lower.includes(ignoreKeywords[i])) return false;
-  }
-
-  // 拡張子またはディレクトリ構造の判定
-  if (lower.split('?')[0].endsWith('.gif')) return false;
-
-  return (
-    lower.includes('.jpg') ||
-    lower.includes('.jpeg') ||
-    lower.includes('.png') ||
-    lower.includes('.webp') ||
-    lower.includes('wp-content/uploads') ||
-    lower.includes('i.gzn.jp') ||           // GIGAZINE 画像サーバー
-    lower.includes('watch.impress.co.jp') ||// Game Watch 画像サーバー
-    lower.includes('4gamer.net')            // 4Gamer 画像サーバー
-  );
-}
-
-/**
- * HTMLテキストを完全にマルチデコード（CDATAや多重エンコードに対応）
- */
-function decodeHtmlEntitiesFully(str) {
-  if (!str) return '';
-  let decoded = str;
-  for (let i = 0; i < 3; i++) {
-    decoded = decoded
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#039;/g, "'")
-      .replace(/&#39;/g, "'")
-      .replace(/&amp;/g, '&');
-  }
-  return decoded;
-}
-
-/**
- * item配下から encoded / content / description / summary などを網羅取得
- */
-function getAllHtmlContents(parentElement) {
-  const children = parentElement.getChildren();
-  const contents = [];
-
-  const targetNames = ['encoded', 'content', 'description', 'summary'];
-
-  targetNames.forEach(target => {
-    for (let i = 0; i < children.length; i++) {
-      if (children[i].getName().toLowerCase() === target) {
-        const text = children[i].getText();
-        if (text && text.trim() !== '') {
-          contents.push(text);
-        }
-      }
-    }
-  });
-
-  return contents;
-}
-
-/**
- * リンクURLを正確に取得
- */
-function getLinkFromItem(item) {
-  let rawLink = '';
-
-  const linkText = getElementTextByNames(item, ['link']);
-  if (linkText) {
-    rawLink = linkText;
-  } else {
-    const children = item.getChildren();
-    for (let i = 0; i < children.length; i++) {
-      if (children[i].getName().toLowerCase() === 'link') {
-        const hrefAttr = children[i].getAttribute('href');
-        if (hrefAttr && hrefAttr.getValue()) {
-          rawLink = hrefAttr.getValue();
-          break;
-        }
-      }
-    }
-  }
-
-  if (rawLink) {
-    return rawLink.replace(/[\r\n\t]/g, '').trim();
-  }
-
-  return '';
 }
 
 /* ヘルパー関数群 */
