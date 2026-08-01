@@ -30,3 +30,22 @@ jobs:
 
       - name: Push to GAS
         run: clasp push --force
+
+      # 詳細な情報を含めた Discord 通知ステップ
+      - name: Notify Discord
+        if: always() # 成功・失敗に関わらず必ず実行
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook: ${{ secrets.WEBHOOK_DISCORD_DEPLOY }}
+          status: ${{ job.status }}
+          title: "GAS自動デプロイ結果"
+          avatar_url: ${{ github.actor.avatar_url }} # プッシュした人のGitHubアイコンを表示
+          nofail: false
+          username: "GitHub Actions"
+          description: |
+            **リポジトリ:** ${{ github.repository }}
+            **実行者（プッシュした人）:** ${{ github.actor }}
+            **コミットメッセージ:** 
+            ```
+            \${{ github.event.head_commit.message }}
+            ```
