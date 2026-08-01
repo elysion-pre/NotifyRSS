@@ -36,7 +36,8 @@ function checkRssAndNotifyDiscord() {
       const fetchOptions = {
         muteHttpExceptions: true,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/rss+xml, application/xml, text/xml, */*'
         }
       };
 
@@ -46,7 +47,15 @@ function checkRssAndNotifyDiscord() {
         return;
       }
 
-      const xml = XmlService.parse(response.getContentText());
+      // XMLパースの安全性強化（構文エラーのあるRSS対策）
+      let xml;
+      try {
+        xml = XmlService.parse(response.getContentText());
+      } catch (xmlError) {
+        console.error(`[行 ${rowIndex}] XMLのパースに失敗しました (${rssUrl}): ${xmlError.message}`);
+        return;
+      }
+
       const root = xml.getRootElement();
       const rootName = root.getName().toLowerCase();
       
@@ -126,7 +135,7 @@ function checkRssAndNotifyDiscord() {
           console.log(`  └ [送信 ${postIndex + 1}/${postsToSend.length}] "${post.title}"`);
           sendDiscordEmbedNotification(webhookUrl, post.title, post.link, post.pubTime, siteName, customIconUrl, defaultIconUrl, colorHex, post.imageUrl);
           
-          Utilities.sleep(2500);
+          Utilities.sleep(2000); // Discordのレートリミット回避用のウェイト
         });
 
         const lastSentPost = postsToSend[postsToSend.length - 1];
@@ -221,7 +230,7 @@ function findFeaturedImageInXml(element) {
 }
 
 /**
- * 記事ページにアクセスして og:image を取得する関数
+ * 記事ページにアクセスして og:image を取得する関数（ブラウザ擬態・ブロック回避仕様）
  */
 function fetchOgImageFromUrl(url) {
   try {
@@ -229,7 +238,9 @@ function fetchOgImageFromUrl(url) {
     const options = {
       muteHttpExceptions: true,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
       }
     };
     const res = UrlFetchApp.fetch(encodedUrl, options);
@@ -250,7 +261,7 @@ function fetchOgImageFromUrl(url) {
 }
 
 /**
- * 有効な画像URLか判定（動画・コメントキャラ画像・アイコン・ロゴ・広告を厳格除外）
+ * 有効な画像URLか判定（動画・コメントキャラ画像・アイコン・ロゴ・広告・SVGを厳格除外）
  */
 function isValidImageUrl(url) {
   if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
@@ -260,16 +271,13 @@ function isValidImageUrl(url) {
   const lower = url.toLowerCase();
   const cleanPath = lower.split('?')[0].split('#')[0];
 
-  // 1. 動画ファイルの拡張子を除外
-  const videoExtensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.m4v'];
-  for (let i = 0; i < videoExtensions.length; i++) {
-    if (cleanPath.endsWith(videoExtensions[i])) return false;
+  // 1. 動画ファイルおよび非対応形式（SVG / GIF / DataURI）を除外
+  const invalidExtensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.m4v', '.gif', '.svg'];
+  for (let i = 0; i < invalidExtensions.length; i++) {
+    if (cleanPath.endsWith(invalidExtensions[i])) return false;
   }
 
-  // 2. GIF画像を除外
-  if (cleanPath.endsWith('.gif')) return false;
-
-  // 3. コメントアイコン・装飾画像・広告・固定看板用画像を厳格除外
+  // 2. コメントアイコン・装飾画像・広告・固定看板用画像を厳格除外
   const ignoreKeywords = [
     'comment', 'chara', 'icon', 'avatar', 'res_', 'thumb_comment', // コメント領域・キャラ画像
     'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
@@ -285,7 +293,7 @@ function isValidImageUrl(url) {
     if (lower.includes(ignoreKeywords[i])) return false;
   }
 
-  // 4. 静止画フォーマットの判定
+  // 3. 静止画フォーマットの判定
   return (
     lower.includes('wp-content/uploads') ||
     cleanPath.endsWith('.jpg') ||
