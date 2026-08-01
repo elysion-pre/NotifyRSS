@@ -103,6 +103,7 @@ function checkRssAndNotifyDiscord() {
         }
       });
 
+      // 初回登録処理
       if (isFirstTime) {
         const recordTime = latestPublishedTime > 0 ? new Date(latestPublishedTime) : new Date();
         sheet.getRange(rowIndex, 8).setValue(recordTime);
@@ -110,6 +111,7 @@ function checkRssAndNotifyDiscord() {
         return;
       }
 
+      // 2回目以降：通知送信
       if (newPosts.length > 0) {
         console.log(`[新着あり] 行 ${rowIndex}: "${siteName}" から ${newPosts.length} 件の新規記事があります。`);
         
@@ -139,10 +141,10 @@ function checkRssAndNotifyDiscord() {
 }
 
 /**
- * 画像抽出ロジック（アイキャッチ優先＆OGPフォールバック）
+ * 画像抽出ロジック（WebページOGP優先＆RSS解析フォールバック）
  */
 function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
-  // 優先度1: 記事ページへアクセスして OGP (og:image) を直接取得する（これが一番正確）
+  // 優先度1: 記事ページへ直接アクセスして og:image を取得（もっとも正確なアイキャッチが取れる）
   if (itemLink && (itemLink.startsWith('http://') || itemLink.startsWith('https://'))) {
     const ogImage = fetchOgImageFromUrl(itemLink);
     if (ogImage) {
@@ -151,14 +153,14 @@ function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
     }
   }
 
-  // 優先度2: メタデータ(media:content, media:thumbnail, enclosure)を探す
+  // 優先度2: RSS内のアイキャッチメタデータ(media:content, media:thumbnail, enclosure)を探す
   const metaImage = findFeaturedImageInXml(item);
   if (metaImage) {
     console.log(`[画像抽出:アイキャッチメタデータ] (${itemTitle}): ${metaImage}`);
     return metaImage;
   }
 
-  // 優先度3: RSS本文(encoded/description) 内から画像を抽出
+  // 優先度3: RSS本文(encoded/description) 内から画像を順次抽出
   const htmlContents = getAllHtmlContents(item);
   for (let j = 0; j < htmlContents.length; j++) {
     let rawHtml = decodeHtmlEntitiesFully(htmlContents[j]);
@@ -197,7 +199,7 @@ function findFeaturedImageInXml(element) {
     if (name === 'content' || name === 'thumbnail') {
       const urlAttr = child.getAttribute('url');
       if (urlAttr && isValidImageUrl(urlAttr.getValue())) {
-        return cleanImageUrl(urlAttr.getValue());
+        return urlAttr.getValue();
       }
     }
   }
@@ -210,7 +212,7 @@ function findFeaturedImageInXml(element) {
       
       const isImageType = typeAttr && typeAttr.getValue().toLowerCase().startsWith('image/');
       if (urlAttr && (isImageType || isValidImageUrl(urlAttr.getValue()))) {
-        return cleanImageUrl(urlAttr.getValue());
+        return urlAttr.getValue();
       }
     }
   }
@@ -218,23 +220,12 @@ function findFeaturedImageInXml(element) {
   return null;
 }
 
-function cleanImageUrl(url) {
-  if (!url) return '';
-  let clean = url.replace(/[\r\n\t]/g, '').trim();
-  if (clean.startsWith('//')) clean = 'https:' + clean;
-  return clean;
-}
-
 /**
  * 記事ページにアクセスして og:image を取得する関数
  */
 function fetchOgImageFromUrl(url) {
   try {
-    // 二重エンコードを防ぐため、一度デコードしてから整形
-    let cleanUrl = url;
-    try { cleanUrl = decodeURIComponent(url); } catch (e) {}
-
-    const encodedUrl = encodeURI(cleanUrl);
+    const encodedUrl = cleanAndEncodeUrl(url);
     const options = {
       muteHttpExceptions: true,
       headers: {
@@ -249,7 +240,7 @@ function fetchOgImageFromUrl(url) {
                     html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
 
     if (ogMatch && ogMatch[1]) {
-      let ogUrl = cleanImageUrl(ogMatch[1]);
+      let ogUrl = ogMatch[1].trim();
       if (isValidImageUrl(ogUrl)) return ogUrl;
     }
   } catch (e) {
@@ -259,7 +250,7 @@ function fetchOgImageFromUrl(url) {
 }
 
 /**
- * 有効な画像URLか判定（動画・コメント用キャラ画像・アイコンなどを厳格除外）
+ * 有効な画像URLか判定（動画・コメントキャラ画像・アイコン・ロゴ・広告を厳格除外）
  */
 function isValidImageUrl(url) {
   if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
@@ -278,12 +269,13 @@ function isValidImageUrl(url) {
   // 2. GIF画像を除外
   if (cleanPath.endsWith('.gif')) return false;
 
-  // 3. コメントアイコン・装飾画像・広告・管理用画像を厳格除外
+  // 3. コメントアイコン・装飾画像・広告・固定看板用画像を厳格除外
   const ignoreKeywords = [
-    'comment', 'chara', 'icon', 'avatar', 'res_', 'thumb_comment', // コメント用キャラ画像対策
+    'comment', 'chara', 'icon', 'avatar', 'res_', 'thumb_comment', // コメント領域・キャラ画像
     'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
     'pochipp', 'pochipp-logo', 'plugins/pochipp',
-    '32381cb2.jpg', // サイト看板ロゴ
+    '32381cb2.jpg',       // サイト看板ロゴ
+    'no-1424960019-1',   // アイキャッチダミー
     '/smilies/', 'emoji', 'counter', 'facebook.com', 'twitter.com', 
     'line.me', 'hatena', 'share', 'clear.gif', 
     'blank.gif', 'pixel', 'ad_banner', 'logo_publisher'
@@ -303,6 +295,95 @@ function isValidImageUrl(url) {
   );
 }
 
+/**
+ * Discord通知機能（二重エンコード防止および安全なURL変換処理）
+ */
+function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, customIconUrl, defaultIconUrl, hexColorStr, imageUrl) {
+  // 1. 記事リンクの安全エンコード（二重エンコード防止）
+  const safeLink = cleanAndEncodeUrl(link);
+
+  let colorNum = 0x3498db;
+  if (hexColorStr) {
+    const cleanHex = String(hexColorStr).replace('#', '').trim();
+    if (cleanHex.length === 6 && !isNaN(parseInt(cleanHex, 16))) {
+      colorNum = parseInt(cleanHex, 16);
+    }
+  }
+
+  const isoTimestamp = new Date(pubTime > 0 ? pubTime : Date.now()).toISOString();
+  const footerIcon = customIconUrl || defaultIconUrl;
+
+  const embed = {
+    title: title,
+    url: safeLink,
+    color: colorNum,
+    footer: {
+      text: siteName || "RSS Feed",
+      icon_url: footerIcon ? cleanAndEncodeUrl(footerIcon) : undefined
+    },
+    timestamp: isoTimestamp
+  };
+
+  // 2. 画像URLの安全エンコード（Discordでの非表示・ブランクを防止）
+  if (imageUrl) {
+    const safeImageUrl = cleanAndEncodeUrl(imageUrl);
+    if (safeImageUrl) {
+      embed.image = { url: safeImageUrl };
+    }
+  }
+
+  const payload = {
+    content: title,
+    embeds: [embed]
+  };
+
+  if (siteName && siteName.trim() !== '') {
+    payload.username = siteName.substring(0, 80);
+  }
+  
+  if (customIconUrl && (customIconUrl.startsWith('http://') || customIconUrl.startsWith('https://'))) {
+    payload.avatar_url = cleanAndEncodeUrl(customIconUrl);
+  }
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  const response = UrlFetchApp.fetch(webhookUrl, options);
+  if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) {
+    console.error(`[Discord送信失敗] HTTP ${response.getResponseCode()}: ${response.getContentText()}`);
+  }
+}
+
+/**
+ * URLのデコード・再エンコードを行う安全用ヘルパー関数
+ * (日本語文字列、二重エンコード、特殊文字を安全に正しく処理します)
+ */
+function cleanAndEncodeUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  
+  let clean = rawUrl.replace(/[\r\n\t]/g, '').trim();
+  if (clean.startsWith('//')) clean = 'https:' + clean;
+
+  try {
+    // すでにパーセントエンコードされている場合は完全に1回生の日本語に戻す
+    let decoded = clean;
+    while (decoded.includes('%')) {
+      const prev = decoded;
+      decoded = decodeURIComponent(decoded);
+      if (prev === decoded) break;
+    }
+    // 標準形式に正規化してエンコード
+    return encodeURI(decoded);
+  } catch (e) {
+    return encodeURI(clean);
+  }
+}
+
+/* ヘルパー関数群 */
 function decodeHtmlEntitiesFully(str) {
   if (!str) return '';
   let decoded = str;
@@ -358,74 +439,6 @@ function getLinkFromItem(item) {
   return rawLink ? rawLink.replace(/[\r\n\t]/g, '').trim() : '';
 }
 
-/**
- * Discord通知機能（二重エンコード防止の安全デコードを実装）
- */
-function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, customIconUrl, defaultIconUrl, hexColorStr, imageUrl) {
-  // 二重エンコードを防止：一度デコードしてから綺麗にエンコードし直す
-  let cleanLink = link;
-  try {
-    cleanLink = decodeURIComponent(link.replace(/[\r\n\t]/g, '').trim());
-  } catch (e) {
-    cleanLink = link.replace(/[\r\n\t]/g, '').trim();
-  }
-  const safeLink = encodeURI(cleanLink);
-
-  let colorNum = 0x3498db;
-  if (hexColorStr) {
-    const cleanHex = String(hexColorStr).replace('#', '').trim();
-    if (cleanHex.length === 6 && !isNaN(parseInt(cleanHex, 16))) {
-      colorNum = parseInt(cleanHex, 16);
-    }
-  }
-
-  const isoTimestamp = new Date(pubTime > 0 ? pubTime : Date.now()).toISOString();
-  const footerIcon = customIconUrl || defaultIconUrl;
-
-  const embed = {
-    title: title,
-    url: safeLink,
-    color: colorNum,
-    footer: {
-      text: siteName || "RSS Feed",
-      icon_url: footerIcon ? encodeURI(footerIcon) : undefined
-    },
-    timestamp: isoTimestamp
-  };
-
-  if (imageUrl) {
-    let cleanImageUrl = imageUrl;
-    try { cleanImageUrl = decodeURIComponent(imageUrl); } catch (e) {}
-    embed.image = { url: encodeURI(cleanImageUrl) };
-  }
-
-  const payload = {
-    content: title,
-    embeds: [embed]
-  };
-
-  if (siteName && siteName.trim() !== '') {
-    payload.username = siteName.substring(0, 80);
-  }
-  
-  if (customIconUrl && (customIconUrl.startsWith('http://') || customIconUrl.startsWith('https://'))) {
-    payload.avatar_url = encodeURI(customIconUrl);
-  }
-
-  const options = {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  };
-
-  const response = UrlFetchApp.fetch(webhookUrl, options);
-  if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) {
-    console.error(`[Discord送信失敗] HTTP ${response.getResponseCode()}: ${response.getContentText()}`);
-  }
-}
-
-/* ヘルパー関数群 */
 function getChildByLocalName(parentElement, localName) {
   const children = parentElement.getChildren();
   for (let i = 0; i < children.length; i++) {
