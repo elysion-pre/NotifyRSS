@@ -181,8 +181,8 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
 
   // サムネイル画像（アイキャッチ）があれば追加
   if (imageUrl) {
-    embed.thumbnail = { url: imageUrl };
-    console.log(`記事画像URL: ${embed.thumbnail.url}`);
+    embed.image = { url: imageUrl };
+    console.log(`記事画像URL: ${embed.image}`);
   }
 
   // ペイロード構築
