@@ -230,7 +230,7 @@ function findFeaturedImageInXml(element) {
 }
 
 /**
- * 記事ページにアクセスして og:image を取得する関数（ブラウザ擬態・ブロック回避仕様）
+ * 記事ページにアクセスして画像（OGP / Schema.org / アイキャッチHTML）を取得する関数
  */
 function fetchOgImageFromUrl(url) {
   try {
@@ -247,15 +247,43 @@ function fetchOgImageFromUrl(url) {
     if (res.getResponseCode() !== 200) return null;
 
     const html = res.getContentText();
-    const ogMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
-                    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+
+    // 優先度1: standard og:image / twitter:image
+    const ogMatch = html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)["']/i) ||
+                    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
 
     if (ogMatch && ogMatch[1]) {
       let ogUrl = ogMatch[1].trim();
       if (isValidImageUrl(ogUrl)) return ogUrl;
     }
+
+    // 優先度2: Schema.org (itemprop="image" 内の meta itemprop="url") ※メガニケ速報対応
+    const schemaMatch = html.match(/itemprop=["']image["'][\s\S]*?<meta[^>]+itemprop=["']url["'][^>]+content=["']([^"']+)["']/i) ||
+                        html.match(/<meta[^>]+itemprop=["']url["'][^>]+content=["']([^"']+)["']/i);
+
+    if (schemaMatch && schemaMatch[1]) {
+      let schemaUrl = schemaMatch[1].trim();
+      if (isValidImageUrl(schemaUrl)) return schemaUrl;
+    }
+
+    // 優先度3: アイキャッチ画像クラス（eye-catch-image / wp-post-image 等）が付与された img タグ
+    const eyeCatchMatch = html.match(/<img[^>]+class=["'][^"']*(?:eye-catch|wp-post-image|featured-image)[^"']*["'][^>]+(?:src|srcset)=["']([^"'\s>]+)["']/i);
+
+    if (eyeCatchMatch && eyeCatchMatch[1]) {
+      let imgUrl = eyeCatchMatch[1].split(',')[0].trim().split(' ')[0];
+      if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+      if (isValidImageUrl(imgUrl)) return imgUrl;
+    }
+
+    // 優先度4: link rel="image_src"
+    const linkSrcMatch = html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i);
+    if (linkSrcMatch && linkSrcMatch[1]) {
+      let linkUrl = linkSrcMatch[1].trim();
+      if (isValidImageUrl(linkUrl)) return linkUrl;
+    }
+
   } catch (e) {
-    console.warn(`[OGP取得失敗] ${url}: ${e.message}`);
+    console.warn(`[Web画像取得失敗] ${url}: ${e.message}`);
   }
   return null;
 }
@@ -272,7 +300,7 @@ function isValidImageUrl(url) {
   const cleanPath = lower.split('?')[0].split('#')[0];
 
   // 1. 動画ファイルおよび非対応形式（SVG / GIF / DataURI）を除外
-  const invalidExtensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.m4v', '.gif', '.svg'];
+  const invalidExtensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.m4v', '.svg'];
   for (let i = 0; i < invalidExtensions.length; i++) {
     if (cleanPath.endsWith(invalidExtensions[i])) return false;
   }
@@ -283,7 +311,6 @@ function isValidImageUrl(url) {
     'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
     'pochipp', 'pochipp-logo', 'plugins/pochipp',
     '32381cb2.jpg',       // サイト看板ロゴ
-    'no-1424960019-1',   // アイキャッチダミー
     '/smilies/', 'emoji', 'counter', 'facebook.com', 'twitter.com', 
     'line.me', 'hatena', 'share', 'clear.gif', 
     'blank.gif', 'pixel', 'ad_banner', 'logo_publisher'
