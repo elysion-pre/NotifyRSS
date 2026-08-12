@@ -331,7 +331,7 @@ function isValidImageUrl(url) {
 }
 
 /**
- * Discord通知機能
+ * Discord通知機能（画像を添付ファイルとして直接送信することで直リンク拒否を回避）
  */
 function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, customIconUrl, defaultIconUrl, hexColorStr, imageUrl) {
   const safeLink = safeUrlEncode(link);
@@ -358,17 +358,6 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
     timestamp: isoTimestamp
   };
 
-  // Embedカード画像埋め込み設定
-  if (imageUrl) {
-    const safeImageUrl = safeUrlEncode(imageUrl);
-    if (safeImageUrl) {
-      embed.image = { url: safeImageUrl };
-      console.log(`  └ [送信画像URL]: ${safeImageUrl}`);
-    }
-  } else {
-    console.log(`  └ [送信画像URL]: なし`);
-  }
-
   const payload = {
     content: title,
     embeds: [embed]
@@ -377,17 +366,56 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
   if (siteName && siteName.trim() !== '') {
     payload.username = siteName.substring(0, 80);
   }
-  
+
   if (customIconUrl && (customIconUrl.startsWith('http://') || customIconUrl.startsWith('https://'))) {
     payload.avatar_url = safeUrlEncode(customIconUrl);
   }
 
-  const options = {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  };
+  // 画像の処理：GAS側で画像をダウンロードしてDiscordに添付送信する
+  let imageBlob = null;
+  if (imageUrl) {
+    try {
+      const imgRes = UrlFetchApp.fetch(imageUrl, {
+        muteHttpExceptions: true,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      });
+      if (imgRes.getResponseCode() === 200) {
+        imageBlob = imgRes.getBlob().setName('embed_image.png');
+        // attachment:// スキーマを使って添付画像をEmbedに指定
+        embed.image = { url: 'attachment://embed_image.png' };
+        console.log(`  └ [画像ダウンロード成功]: 添付ファイルとして送信します`);
+      } else {
+        console.warn(`  └ [画像ダウンロード失敗] HTTP ${imgRes.getResponseCode()}: 直リンクフォールバックを試みます`);
+        embed.image = { url: safeUrlEncode(imageUrl) };
+      }
+    } catch (e) {
+      console.warn(`  └ [画像取得例外]: ${e.message}`);
+      embed.image = { url: safeUrlEncode(imageUrl) };
+    }
+  }
+
+  // リクエストの作成（画像添付がある場合は multipart/form-data）
+  let options = {};
+  if (imageBlob) {
+    const formData = {
+      'payload_json': Utilities.newBlob(JSON.stringify(payload), 'application/json'),
+      'files[0]': imageBlob
+    };
+    options = {
+      method: 'post',
+      payload: formData,
+      muteHttpExceptions: true
+    };
+  } else {
+    options = {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    };
+  }
 
   const response = UrlFetchApp.fetch(webhookUrl, options);
   if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) {
