@@ -1,6 +1,6 @@
 # NotifyRSS
 - RSSの更新をDiscordへ通知
-- **Google Apps Script(GAS)**のコードをGutHub上で管理
+- **Google Apps Script(GAS)** のコードをGutHub上で管理
 
 ---
 
