@@ -1,7 +1,8 @@
 # NotifyRSS
-RSSの更新をDiscordへ高精度（画像付き）通知するスクリプト
+- RSSの更新をDiscordへ通知
+- **Google Apps Script(GAS)**のコードをGutHub上で管理
 
-## 🗒️ 概要
+## 🗒️ はじめに
 ブログやニュースサイトの更新をDiscordに通知したい時、  
 既存のIFTTTやZapierなどのツールだと
 - 「画像が表示されない」
