@@ -11,7 +11,8 @@ function checkRssAndNotifyDiscord() {
   }
 
   const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
-  const sheet = spreadsheet.getActiveSheet();
+  // アクティブシートの誤取得を防ぐため、シート名を明示（必要に応じてシート名を変更してください）
+  const sheet = spreadsheet.getSheetByName('シート1') || spreadsheet.getActiveSheet();
   const lastRow = sheet.getLastRow();
   
   if (lastRow < 2) return;
@@ -47,7 +48,7 @@ function checkRssAndNotifyDiscord() {
         return;
       }
 
-      // XMLパースの安全性強化（構文エラーのあるRSS対策）
+      // XMLパースの安全性強化
       let xml;
       try {
         xml = XmlService.parse(response.getContentText());
@@ -126,9 +127,9 @@ function checkRssAndNotifyDiscord() {
         
         newPosts.sort((a, b) => a.pubTime - b.pubTime);
 
-        const postsToSend = newPosts.slice(0, 5);
-        if (newPosts.length > 5) {
-          console.warn(`  └ ※件数が多いため、今回の実行では先頭5件のみ送信します。`);
+        const postsToSend = newPosts.slice(0, CONFIG.MAX_POSTS_PER_RUN);
+        if (newPosts.length > CONFIG.MAX_POSTS_PER_RUN) {
+          console.warn(`  └ ※件数が多いため、今回の実行では先頭 ${CONFIG.MAX_POSTS_PER_RUN} 件のみ送信します。`);
         }
 
         postsToSend.forEach((post, postIndex) => {
@@ -257,7 +258,7 @@ function fetchOgImageFromUrl(url) {
       if (isValidImageUrl(ogUrl)) return ogUrl;
     }
 
-    // 優先度2: Schema.org (itemprop="image" 内の meta itemprop="url") ※メガニケ速報対応
+    // 優先度2: Schema.org (itemprop="image" 内の meta itemprop="url")
     const schemaMatch = html.match(/itemprop=["']image["'][\s\S]*?<meta[^>]+itemprop=["']url["'][^>]+content=["']([^"']+)["']/i) ||
                         html.match(/<meta[^>]+itemprop=["']url["'][^>]+content=["']([^"']+)["']/i);
 
@@ -266,7 +267,7 @@ function fetchOgImageFromUrl(url) {
       if (isValidImageUrl(schemaUrl)) return schemaUrl;
     }
 
-    // 優先度3: アイキャッチ画像クラス（eye-catch-image / wp-post-image 等）が付与された img タグ
+    // 優先度3: アイキャッチ画像クラスが付与された img タグ
     const eyeCatchMatch = html.match(/<img[^>]+class=["'][^"']*(?:eye-catch|wp-post-image|featured-image)[^"']*["'][^>]+(?:src|srcset)=["']([^"'\s>]+)["']/i);
 
     if (eyeCatchMatch && eyeCatchMatch[1]) {
@@ -289,7 +290,7 @@ function fetchOgImageFromUrl(url) {
 }
 
 /**
- * 有効な画像URLか判定（動画・コメントキャラ画像・アイコン・ロゴ・広告・SVGを厳格除外）
+ * 有効な画像URLか判定（Config.gsの定数を参照）
  */
 function isValidImageUrl(url) {
   if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
@@ -299,44 +300,30 @@ function isValidImageUrl(url) {
   const lower = url.toLowerCase();
   const cleanPath = lower.split('?')[0].split('#')[0];
 
-  // 1. 動画ファイルおよび非対応形式（SVG / GIF / DataURI）を除外
-  const invalidExtensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.m4v', '.svg'];
-  for (let i = 0; i < invalidExtensions.length; i++) {
-    if (cleanPath.endsWith(invalidExtensions[i])) return false;
+  // 1. 動画・非対応形式の除外
+  if (CONFIG.INVALID_EXTENSIONS.some(ext => cleanPath.endsWith(ext))) {
+    return false;
   }
 
-  // 2. コメントアイコン・装飾画像・広告・固定看板用画像を厳格除外
-  const ignoreKeywords = [
-    'comment', 'chara', 'icon', 'avatar', 'res_', 'thumb_comment', // コメント領域・キャラ画像
-    'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
-    'pochipp', 'pochipp-logo', 'plugins/pochipp',
-    '32381cb2.jpg',       // サイト看板ロゴ
-    '/smilies/', 'emoji', 'counter', 'facebook.com', 'twitter.com', 
-    'line.me', 'hatena', 'share', 'clear.gif', 
-    'blank.gif', 'pixel', 'ad_banner', 'logo_publisher'
-  ];
-
-  for (let i = 0; i < ignoreKeywords.length; i++) {
-    if (lower.includes(ignoreKeywords[i])) return false;
+  // 2. 除外キーワードの判定
+  if (CONFIG.IGNORE_KEYWORDS.some(keyword => lower.includes(keyword))) {
+    return false;
   }
 
-  // 3. 静止画フォーマットの判定
-  return (
-    lower.includes('wp-content/uploads') ||
-    cleanPath.endsWith('.jpg') ||
-    cleanPath.endsWith('.jpeg') ||
-    cleanPath.endsWith('.png') ||
-    cleanPath.endsWith('.webp')
-  );
+  // 3. 許可拡張子またはWordPressアップロードパスの判定
+  const hasValidExt = CONFIG.VALID_IMAGE_EXTENSIONS.some(ext => cleanPath.endsWith(ext));
+  const isWpUpload = lower.includes('wp-content/uploads');
+
+  return hasValidExt || isWpUpload;
 }
 
 /**
- * Discord通知機能（画像を添付ファイルとして直接送信することで直リンク拒否を回避）
+ * Discord通知機能（画像を添付ファイルとして直接送信）
  */
 function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName, customIconUrl, defaultIconUrl, hexColorStr, imageUrl) {
   const safeLink = safeUrlEncode(link);
 
-  let colorNum = 0x3498db;
+  let colorNum = CONFIG.DEFAULT_COLOR;
   if (hexColorStr) {
     const cleanHex = String(hexColorStr).replace('#', '').trim();
     if (cleanHex.length === 6 && !isNaN(parseInt(cleanHex, 16))) {
@@ -383,7 +370,6 @@ function sendDiscordEmbedNotification(webhookUrl, title, link, pubTime, siteName
       });
       if (imgRes.getResponseCode() === 200) {
         imageBlob = imgRes.getBlob().setName('embed_image.png');
-        // attachment:// スキーマを使って添付画像をEmbedに指定
         embed.image = { url: 'attachment://embed_image.png' };
         console.log(`  └ [画像ダウンロード成功]: 添付ファイルとして送信します`);
       } else {
@@ -432,10 +418,8 @@ function safeUrlEncode(rawUrl) {
   let clean = rawUrl.replace(/[\r\n\t]/g, '').trim();
   if (clean.startsWith('//')) clean = 'https:' + clean;
 
-  // HTMLエンティティ(&amp;等)を完全解除
   clean = decodeHtmlEntitiesFully(clean);
 
-  // すでにパーセントエンコード済みの場合は1回完全解凍
   try {
     let decoded = clean;
     while (decoded.includes('%')) {
@@ -448,7 +432,6 @@ function safeUrlEncode(rawUrl) {
     // 解凍失敗時はそのまま進む
   }
 
-  // マルチバイト文字（日本語など）および特殊文字を安全に置換・エンコード
   return clean.replace(/[^\x00-\x7F]/g, function(c) {
     return encodeURIComponent(c);
   }).replace(/ /g, '%20');
