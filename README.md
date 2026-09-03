@@ -221,59 +221,9 @@ cat ~/.clasprc.json
 
 ### ステップ 6： GitHub Actions ワークフローを作成する
 
-リポジトリトップで **「Add file」 ＞ 「Create new file」** を選択し、ファイル名に `.github/workflows/deploy.yml` と入力して以下のコードを貼り付け、コミットします。
+リポジトリトップで **「Add file」 ＞ 「Create new file」** を選択し、ファイル名に `.github/workflows/deploy.yml` と入力して以下URL先のコードを貼り付け、コミットします。
 
-```yml
-name: Deploy to GAS
-
-on:
-  push:
-    branches:
-      - main
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install clasp
-        run: npm install -g @google/clasp
-
-      - name: Create clasprc.json
-        run: |
-          echo '${{ secrets.CLASPRC_JSON }}' > ~/.clasprc.json
-
-      - name: Replace Script ID
-        run: |
-          sed -i "s/\${SCRIPT_ID}/${{ secrets.SCRIPT_ID }}/g" .clasp.json
-
-      - name: Push to GAS
-        run: clasp push --force
-
-      - name: Notify Discord
-        if: always()
-        uses: sarisia/actions-status-discord@v1
-        with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK }}
-          status: ${{ job.status }}
-          title: "GAS自動デプロイ結果"
-          nofail: false
-          username: "GitHub Actions"
-          description: |
-            **リポジトリ:** ${{ github.repository }}
-            **実行者:** ${{ github.actor }}
-            **コミットメッセージ:**
-            ```
-            ${{ github.event.head_commit.message }}
-            ```
-```
+https://github.com/elysion-pre/NotifyRSS/blob/main/.github/workflows/deploy.yml
 
 コミット完了後、自動的に **GitHub Actions** が起動し、デプロイ結果が **Discord チャンネル**に届きます。
 
@@ -285,41 +235,9 @@ jobs:
 
 ## ⚙️ 5. スクリプトの設定
 
-**Config.gs** の設定値を書き換えることで、  
-除外キーワードや動作パラメータの調整が可能です。
+以下URL先 **Config.gs** のコード設定値を書き換えることで、除外キーワードや動作パラメータの調整が可能です。
 
-```js
-/**
- * 処理の設定および除外キーワードの定義ファイル
- */
-const CONFIG = {
-  // 1回の実行で送信する最大記事数（Discordレートリミット対策）
-  MAX_POSTS_PER_RUN: 5,
-
-  // デフォルトの埋め込みカラー（16進数数値）
-  DEFAULT_COLOR: 0x3498db,
-
-  // 除外する動画・非対応拡張子
-  INVALID_EXTENSIONS: [
-    '.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.m4v', '.svg', '.gif'
-  ],
-
-  // 有効とみなす画像拡張子
-  VALID_IMAGE_EXTENSIONS: [
-    '.jpg', '.jpeg', '.png', '.webp'
-  ],
-
-  // コメントアイコン・装飾画像・広告・ロゴ等の除外キーワード
-  IGNORE_KEYWORDS: [
-    'comment', 'chara', 'icon', 'avatar', 'res_', 'thumb_comment',
-    'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
-    'pochipp', 'pochipp-logo', 'plugins/pochipp',
-    '/smilies/', 'emoji', 'counter', 'facebook.com', 'twitter.com',
-    'line.me', 'hatena', 'share', 'clear.gif',
-    'blank.gif', 'pixel', 'ad_banner', 'logo_publisher'
-  ]
-};
-```
+https://github.com/elysion-pre/NotifyRSS/blob/main/Config.gs
 
 ---
 
