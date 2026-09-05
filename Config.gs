@@ -24,7 +24,7 @@ const CONFIG = {
     'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
     'pochipp', 'pochipp-logo', 'plugins/pochipp',
     '/smilies/', 'emoji', 'counter', 'facebook.com', 'twitter.com',
-    'line.me', 'hatena', 'share', 'clear.gif',
+    'line.me', 'hatena', 'share', 'clear.gif', 'default.jpg',
     'blank.gif', 'pixel', 'ad_banner', 'logo_publisher'
   ]
 };
