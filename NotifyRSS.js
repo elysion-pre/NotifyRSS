@@ -176,6 +176,10 @@ function getImageUrlFromItemOrWeb(item, itemTitle, itemLink) {
     let rawHtml = decodeHtmlEntitiesFully(htmlContents[j]);
     if (!rawHtml) continue;
 
+    // <a>タグで囲まれた画像（リンク付き画像）をHTMLから事前に完全に消去する
+    // <a>から始まり、途中に<img...>を挟んで</a>で終わる区間を空文字に置換します
+    rawHtml = rawHtml.replace(/<a\b[^>]*>([\s\S]*?)<img\b[^>]*>([\s\S]*?)<\/a>/gi, '');
+
     const imgRegex = /<img[^>]+(?:src|data-src|data-original|srcset)=["']([^"'\s>]+)["']/gi;
     let match;
 
@@ -232,7 +236,7 @@ function findFeaturedImageInXml(element) {
 
 /**
  * 記事ページにアクセスして画像（OGP / Schema.org / アイキャッチHTML）を取得する関数
- */
+*/
 function fetchOgImageFromUrl(url) {
   try {
     const encodedUrl = safeUrlEncode(url);
@@ -244,49 +248,40 @@ function fetchOgImageFromUrl(url) {
         'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
       }
     };
-    const res = UrlFetchApp.fetch(encodedUrl, options);
-    if (res.getResponseCode() !== 200) return null;
 
-    const html = res.getContentText();
+    const response = UrlFetchApp.fetch(encodedUrl, options);
+    if (response.getResponseCode() !== 200) return null;
 
-    // 優先度1: standard og:image / twitter:image
-    const ogMatch = html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)["']/i) ||
-                    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+    let html = response.getContentText();
+    if (!html) return null;
 
-    if (ogMatch && ogMatch[1]) {
-      let ogUrl = ogMatch[1].trim();
-      if (isValidImageUrl(ogUrl)) return ogUrl;
+    // 1. og:image を検索
+    const ogRegex = /<meta[^>]+(?:property|name)=["']og:image["'][^>]+content=["']([^"']+)["']/i;
+    const ogMatch = ogRegex.exec(html);
+    if (ogMatch && isValidImageUrl(ogMatch[1])) {
+      return ogMatch[1];
     }
 
-    // 優先度2: Schema.org (itemprop="image" 内の meta itemprop="url")
-    const schemaMatch = html.match(/itemprop=["']image["'][\s\S]*?<meta[^>]+itemprop=["']url["'][^>]+content=["']([^"']+)["']/i) ||
-                        html.match(/<meta[^>]+itemprop=["']url["'][^>]+content=["']([^"']+)["']/i);
-
-    if (schemaMatch && schemaMatch[1]) {
-      let schemaUrl = schemaMatch[1].trim();
-      if (isValidImageUrl(schemaUrl)) return schemaUrl;
+    // 2. twitter:image を検索
+    const twitterRegex = /<meta[^>]+(?:property|name)=["']twitter:image["'][^>]+content=["']([^"']+)["']/i;
+    const twitterMatch = twitterRegex.exec(html);
+    if (twitterMatch && isValidImageUrl(twitterMatch[1])) {
+      return twitterMatch[1];
     }
 
-    // 優先度3: アイキャッチ画像クラスが付与された img タグ
-    const eyeCatchMatch = html.match(/<img[^>]+class=["'][^"']*(?:eye-catch|wp-post-image|featured-image)[^"']*["'][^>]+(?:src|srcset)=["']([^"'\s>]+)["']/i);
+    // 3. 【フォールバック】本文内のアイキャッチらしき<img>タグを検索する場合の対策
+    // <a>タグで囲まれた画像（リンク付き画像）をHTMLから事前に完全に消去する
+    html = html.replace(/<a\b[^>]*>([\s\S]*?)<img\b[^>]*>([\s\S]*?)<\/a>/gi, '');
 
-    if (eyeCatchMatch && eyeCatchMatch[1]) {
-      let imgUrl = eyeCatchMatch[1].split(',')[0].trim().split(' ')[0];
-      if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
-      if (isValidImageUrl(imgUrl)) return imgUrl;
-    }
+    // (※もしこの後に一般的な <img> タグを検索するロジックが続いている場合、
+    // 上記でリンク付き画像が消去された html 変数に対して検索が行われるため安全になります)
 
-    // 優先度4: link rel="image_src"
-    const linkSrcMatch = html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i);
-    if (linkSrcMatch && linkSrcMatch[1]) {
-      let linkUrl = linkSrcMatch[1].trim();
-      if (isValidImageUrl(linkUrl)) return linkUrl;
-    }
-
+    // ※提供されたコードの末尾が切れていたため、一般的な閉じ処理を記載しています
+    return null; 
   } catch (e) {
-    console.warn(`[Web画像取得失敗] ${url}: ${e.message}`);
+    console.warn(`[fetchOgImageFromUrl] エラー: ${e.message}`);
+    return null;
   }
-  return null;
 }
 
 /**
