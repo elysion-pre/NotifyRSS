@@ -21,8 +21,7 @@ const CONFIG = {
   // コメントアイコン・装飾画像・広告・ロゴ等の除外キーワード
   IGNORE_KEYWORDS: [
     'comment', 'chara', 'icon', 'avatar', 'res_', 'thumb_comment',
-    'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com',
-    'pochipp', 'pochipp-logo', 'plugins/pochipp',
+    'amazon.com', 'amazon-adsystem.com', 'm.media-amazon.com', 'ssl-images-amazon.com', 'amzn.to',    'pochipp', 'pochipp-logo', 'plugins/pochipp',
     '/smilies/', 'emoji', 'counter', 'facebook.com', 'twitter.com',
     'line.me', 'hatena', 'share', 'clear.gif', 'default.jpg',
     'blank.gif', 'pixel', 'ad_banner', 'logo_publisher'
